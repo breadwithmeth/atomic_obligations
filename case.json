@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "case_id": "KZ-DEMO-1",
+  "locale": "ru-KZ",
+  "normative_set": [],
+  "patient": {
+    "iin": null,
+    "name": null,
+    "dob": null,
+    "sex": null
+  },
+  "encounter": {
+    "care_setting": null,
+    "department": null,
+    "admit_dt": null,
+    "discharge_dt": null,
+    "links": {
+      "mother_case_id": null,
+      "newborn_case_id": null
+    }
+  },
+  "documents": [
+    {
+      "doc_id": "doc_000001",
+      "type": "generic",
+      "created_dt": null,
+      "source": {
+        "filename": "terapevt.docx",
+        "hash": "sha256:2b2d5450505ed735b219a426855fc64197f6f0a6fea65761b092926bcc38aea2"
+      },
+      "lang": "ru",
+      "text_ref": "raw://doc_000001",
+      "pages": 1
+    }
+  ],
+  "facts": {
+    "diagnoses": [],
+    "procedures": [],
+    "anesthesia": [],
+    "consents": [],
+    "orders": [],
+    "administrations": [],
+    "vitals_daily": [],
+    "newborn": [],
+    "vaccinations": [],
+    "infection_control": []
+  },
+  "rule_results": [],
+  "evidence_index": []
+}
