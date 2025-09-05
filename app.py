@@ -1,44 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-med-audit API — FastAPI + Ollama + SQLite
-Single-file backend that:
-- accepts a DOCX/PDF/TXT, model name and options
-- runs the audit (deterministic checks + LLM via Ollama)
-- stores task status/results in DB
-- can generate XLSX report and annotated copy (PDF/DOCX)
+med-audit API — FastAPI + Ollama + SQLite (ускоренная)
+- Быстрее извлекает текст из PDF (PyMuPDF вместо pdfplumber)
+- Параллелит LLM-проверки по разделам (ThreadPool)
+- Держит модель в памяти (keep_alive) и HTTP keep-alive (httpx)
+- Кеширует ответы LLM по хэшу секции (SQLite)
+- Оптимизирует SQLite (WAL, synchronous=NORMAL)
 
-Run:
-  python -m pip install fastapi uvicorn sqlalchemy python-docx pdfplumber openpyxl pymupdf pydantic-settings
-  # optional: python -m pip install python-multipart (FastAPI will pull it via starlette but add if needed)
+Установка:
+  python -m pip install fastapi uvicorn sqlalchemy httpx python-docx pymupdf openpyxl pydantic-settings
+  # опционально: pdfplumber больше не обязателен
   export OLLAMA_BASE_URL=http://localhost:11434
-  uvicorn app:app --reload --host 0.0.0.0 --port 8000
+  uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
-Example:
-  curl -F "file=@инфеция.pdf" -F "model=llama3.1:8b" -F "xlsx=true" -F "annotate=true" \
-       http://localhost:8000/api/v1/audits
-  # then: GET /api/v1/audits/{id}
-  # download: GET /api/v1/audits/{id}/download?kind=json|xlsx|annotated
-
-Notes:
-- Default DB is SQLite in ./med_audit.db; configure via DATABASE_URL env (e.g., postgresql+psycopg://...)
-- Files are stored under ./storage/{audit_id}/
-- This is a compact single-file app; split into modules for production.
+Переменные окружения:
+  AUDIT_CONCURRENCY=4       # параллельные запросы к Ollama
+  MAX_SECTION_CHARS=8000    # обрезка текста секции
+  OLLAMA_KEEP_ALIVE=5m      # сколько держать модель в памяти на стороне Ollama
 """
 
 from __future__ import annotations
-import enum, io, json, os, re, uuid, datetime, tempfile, logging
+import enum, json, os, re, uuid, datetime, logging, hashlib
 from typing import Dict, Any, List, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import httpx
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from fastapi.middleware.cors import CORSMiddleware
+
 from sqlalchemy import (
-    create_engine, Column, String, DateTime, Text, Enum as SAEnum, Integer, Boolean
+    create_engine, Column, String, DateTime, Text, Enum as SAEnum, Boolean, event
 )
-from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ----------------------- Settings -----------------------
 class Settings(BaseSettings):
@@ -46,7 +43,9 @@ class Settings(BaseSettings):
     STORAGE_DIR: str = "./storage"
     OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     DEFAULT_MODEL: str = "llama3.1:8b"
-    MAX_SECTION_CHARS: int = 18000
+    MAX_SECTION_CHARS: int = int(os.environ.get("MAX_SECTION_CHARS", 8000))
+    AUDIT_CONCURRENCY: int = int(os.environ.get("AUDIT_CONCURRENCY", 4))
+    OLLAMA_KEEP_ALIVE: str = os.environ.get("OLLAMA_KEEP_ALIVE", "5m")
 
 settings = Settings()
 os.makedirs(settings.STORAGE_DIR, exist_ok=True)
@@ -74,7 +73,6 @@ class Audit(Base):
     output_xlsx_path = Column(String)
     annotated_path = Column(String)
 
-    # Aggregated JSON blobs as text to stay SQLite-friendly
     summary_json = Column(Text)
     sections_json = Column(Text)
     deterministic_issues_json = Column(Text)
@@ -86,19 +84,44 @@ class Audit(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
-    # options
     want_xlsx = Column(Boolean, default=False)
     want_annotate = Column(Boolean, default=False)
 
-engine = create_engine(settings.DATABASE_URL, future=True)
+class LLMCache(Base):
+    __tablename__ = "llm_cache"
+    key = Column(String, primary_key=True)  # sha256(model+section+text)
+    value = Column(Text)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    future=True,
+    connect_args={"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {},
+)
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA temp_store=MEMORY;")
+        cursor.execute("PRAGMA mmap_size=134217728;")
+        cursor.close()
+    except Exception:
+        pass
+
 Base.metadata.create_all(engine)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 # ----------------------- App init ----------------------
-app = FastAPI(title="med-audit API", version="1.0")
+app = FastAPI(title="med-audit API (fast)", version="1.2")
+app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 log = logging.getLogger("med-audit")
 logging.basicConfig(level=logging.INFO)
-app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
+
+# HTTP client с keep-alive и HTTP/2
+HTTP = httpx.Client(base_url=settings.OLLAMA_BASE_URL, timeout=300, http2=True)
 
 # ----------------------- Utils: read & normalize --------
 def read_text(path: str) -> str:
@@ -108,11 +131,12 @@ def read_text(path: str) -> str:
         doc = Document(path)
         return "\n".join(p.text for p in doc.paragraphs)
     elif ext == ".pdf":
-        import pdfplumber
+        import fitz  # PyMuPDF — быстрее, чем pdfplumber/pdfminer
+        doc = fitz.open(path)
         text = []
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                text.append(page.extract_text() or "")
+        for page in doc:
+            text.append(page.get_text("text") or "")
+        doc.close()
         return "\n".join(text)
     else:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -157,7 +181,6 @@ def split_sections(text: str) -> Dict[str, str]:
     return sections
 
 # ----------------------- Deterministic checks -----------
-DATE_RE = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
 ICD_RE  = re.compile(r"\b([A-TV-ZА-ЯЁ]{1}\d{2}(?:\.\d)?)\b", re.IGNORECASE)
 BOX_RE  = re.compile(r"(?:Бокс|Палата)\s*№\s*([0-9]+)")
 
@@ -169,7 +192,6 @@ def extract_boxes(text: str) -> List[str]:
 
 def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[str,Any]]:
     issues: List[Dict[str,Any]] = []
-    # years mismatch
     years = re.findall(r"\b20\d{2}\b", full_text)
     distinct = sorted(set(years))
     if len(distinct) >= 2:
@@ -182,7 +204,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "fix":"Привести все даты к фактическому году госпитализации."
         })
 
-    # ICD vs tonsillitis
     icds = extract_icd(full_text)
     if ("тонзиллит" in full_text.lower()) or ("лакунарн" in full_text.lower()) or ("паратонзилл" in full_text.lower()):
         wrong_b = any(code.upper().startswith("B") for code in icds)
@@ -195,7 +216,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
                 "fix":"Для острого тонзиллита — J03.x; для паратонзиллярного абсцесса/целлюлита — J36."
             })
 
-    # different boxes
     boxes = extract_boxes(full_text)
     if len(boxes) > 1:
         issues.append({
@@ -206,7 +226,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "fix":"Унифицировать место; при переводах — отдельная запись с датой/временем."
         })
 
-    # isolation checkbox
     triage = sections.get("Триаж", "")
     if triage and ("Пациент должен быть изолирован" in triage) and not re.search(r"изолирован:\s*(Да|Нет)", triage, re.IGNORECASE):
         issues.append({
@@ -217,7 +236,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "fix":"Отметить и указать режим изоляции (контактный/капельный)."
         })
 
-    # plan vs orders (ceftriax)
     plan = sections.get("Осмотр приёмного покоя", "") + "\n" + sections.get("Первичный осмотр", "")
     orders = sections.get("Лист назначений", "")
     if plan and orders:
@@ -232,7 +250,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
                 "fix":"Добавить фактические инъекции или оформить смену схемы на per os (step-down)."
             })
 
-    # labs ordered but results empty
     lab_orders = sections.get("Назначения на исследования", "")
     labs_results = sections.get("Результаты исследований", "")
     if lab_orders and (not labs_results or len(labs_results) < 50):
@@ -246,30 +263,30 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
 
     return issues
 
-# ----------------------- Ollama chat --------------------
-import urllib.request
+# ----------------------- Ollama chat (параллельно + кеш) --------
+OLLAMA_CHAT_PATH = "/api/chat"
 
-def ollama_chat(model: str, system: str, user: str) -> Dict[str,Any]:
-    url = settings.OLLAMA_BASE_URL.rstrip("/") + "/api/chat"
-    body = {
-        "model": model,
-        "messages": [
-            {"role":"system","content": system},
-            {"role":"user","content": user}
-        ],
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0, "num_ctx": 8192}
-    }
-    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type":"application/json"})
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        data = json.loads(resp.read())
-    # Ollama returns {"message": {"content": "{...json...}"}}
-    try:
-        content = data["message"]["content"]
-        return json.loads(content)
-    except Exception:
-        return {"error":"bad_json_from_model","raw":data}
+def _hash_key(model: str, section_name: str, text: str) -> str:
+    h = hashlib.sha256()
+    h.update(model.encode("utf-8"))
+    h.update(b"\0"); h.update(section_name.encode("utf-8"))
+    h.update(b"\0"); h.update(text.encode("utf-8"))
+    return h.hexdigest()
+
+def cache_get(key: str) -> Optional[dict]:
+    with SessionLocal() as db:
+        row = db.get(LLMCache, key)
+        if row and row.value:
+            try:
+                return json.loads(row.value)
+            except Exception:
+                return None
+    return None
+
+def cache_set(key: str, value: dict):
+    with SessionLocal() as db:
+        db.merge(LLMCache(key=key, value=json.dumps(value, ensure_ascii=False)))
+        db.commit()
 
 SECTION_PROMPT = (
     "Ты — медицинский аудитор стационара (инфекционный профиль) в РК.\n"
@@ -280,20 +297,68 @@ SECTION_PROMPT = (
     "Без пояснений и рассуждений."
 )
 
-def audit_sections_with_llm(model: str, sections: Dict[str,str]) -> List[Dict[str,Any]]:
-    results: List[Dict[str,Any]] = []
+def _ollama_chat_sync(model: str, user_content: str) -> Dict[str,Any]:
+    body = {
+        "model": model,
+        "messages": [
+            {"role":"system","content": SECTION_PROMPT},
+            {"role":"user","content": user_content}
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0, "num_ctx": 4096},
+        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
+    }
+    r = HTTP.post(OLLAMA_CHAT_PATH, json=body)
+    r.raise_for_status()
+    data = r.json()
+    try:
+        content = data["message"]["content"]
+        return json.loads(content)
+    except Exception:
+        return {"error":"bad_json_from_model","raw":data}
+
+def audit_sections_with_llm_parallel(model: str, sections: Dict[str,str]) -> List[Dict[str,Any]]:
+    tasks = []
     for name, chunk in sections.items():
         short = chunk if len(chunk) < settings.MAX_SECTION_CHARS else chunk[:settings.MAX_SECTION_CHARS]
+        key = _hash_key(model, name, short)
+        cached = cache_get(key)
+        if cached is not None:
+            if isinstance(cached, dict) and "issues" in cached:
+                cached["section"] = cached.get("section", name)
+                tasks.append((name, None, key, cached))
+                continue
         user = f"Раздел: {name}\n\nТекст:\n<<<\n{short}\n>>>\n"
-        res = ollama_chat(model, SECTION_PROMPT, user)
+        tasks.append((name, user, key, None))
+
+    results: List[Dict[str,Any]] = []
+
+    def worker(name_user_key):
+        name, user, key, already = name_user_key
+        if already is not None:
+            return already
+        res = _ollama_chat_sync(model, user)
+        if isinstance(res, dict):
+            cache_set(key, res)
         if isinstance(res, dict) and "issues" in res:
             res["section"] = res.get("section", name)
-            results.append(res)
-        else:
-            results.append({
-                "section": name,
-                "issues": [{"severity":"minor","title":"Модель вернула нечитаемый JSON","evidence":str(res)[:500],"fix":"Повторить прогон/уменьшить фрагмент"}]
-            })
+            return res
+        return {"section": name, "issues": [{"severity":"minor","title":"Модель вернула нечитаемый JSON","evidence":str(res)[:500],"fix":"Повторить прогон/уменьшить фрагмент"}]}
+
+    to_call = [t for t in tasks if t[1] is not None]
+    cached_ready = [t[3] for t in tasks if t[1] is None]
+    results.extend(cached_ready)
+
+    if to_call:
+        workers = max(1, settings.AUDIT_CONCURRENCY)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(worker, t) for t in to_call]
+            for fut in as_completed(futures):
+                results.append(fut.result())
+
+    order = list(sections.keys())
+    results.sort(key=lambda x: order.index(x.get("section","")) if x.get("section","") in order else 1e9)
     return results
 
 # ----------------------- Reports ------------------------
@@ -389,14 +454,13 @@ def annotate_docx(docx_path: str, issues: List[Dict[str,Any]], out_path: str):
         if idx < 0:
             return False
         before, mid, after = text[:idx], text[idx:idx+len(needle)], text[idx+len(needle):]
-        # reset runs
         for _ in range(len(p.runs)-1, -1, -1):
             r = p.runs[_]
             r.clear()
             r._element.getparent().remove(r._element)
-        r1 = p.add_run(before)
+        p.add_run(before)
         r2 = p.add_run(mid); r2.font.highlight_color = WD_COLOR_INDEX.YELLOW
-        r3 = p.add_run(after)
+        p.add_run(after)
         p.add_run(f"  [AUDIT] {note_text}").font.highlight_color = WD_COLOR_INDEX.YELLOW
         return True
 
@@ -423,10 +487,6 @@ def annotate_docx(docx_path: str, issues: List[Dict[str,Any]], out_path: str):
 
     doc.save(out_path)
 
-# ----------------------- Service funcs ------------------
-def ensure_dir(p: str):
-    os.makedirs(p, exist_ok=True)
-
 # ----------------------- Schemas ------------------------
 class AuditCreateResp(BaseModel):
     id: str
@@ -451,13 +511,10 @@ def health():
 
 @app.get("/api/v1/models")
 def list_models():
-    # proxy to Ollama /api/tags
-    import urllib.request
-    url = settings.OLLAMA_BASE_URL.rstrip("/") + "/api/tags"
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.loads(resp.read())
-        return data
+        r = HTTP.get("/api/tags")
+        r.raise_for_status()
+        return r.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama not reachable: {e}")
 
@@ -467,16 +524,14 @@ def create_audit(background_tasks: BackgroundTasks,
                  model: str = Form(settings.DEFAULT_MODEL),
                  xlsx: bool = Form(False),
                  annotate: bool = Form(False)):
-    # persist file
     with SessionLocal() as db:
         audit = Audit(model=model, status=AuditStatus.queued, want_xlsx=xlsx, want_annotate=annotate)
         audit.input_name = file.filename
         audit.input_mime = file.content_type
         db.add(audit); db.commit(); db.refresh(audit)
 
-        # save to storage dir
         workdir = os.path.join(settings.STORAGE_DIR, audit.id)
-        ensure_dir(workdir)
+        os.makedirs(workdir, exist_ok=True)
         in_ext = os.path.splitext(file.filename or "")[1] or ".bin"
         in_path = os.path.join(workdir, f"input{in_ext}")
         with open(in_path, "wb") as f:
@@ -484,7 +539,6 @@ def create_audit(background_tasks: BackgroundTasks,
         audit.input_path = in_path
         db.commit()
 
-        # schedule background processing
         background_tasks.add_task(run_audit_job, audit.id)
         return AuditCreateResp(id=audit.id, status=audit.status, model=audit.model)
 
@@ -576,8 +630,8 @@ def run_audit_job(audit_id: str):
             # deterministic
             det = deterministic_checks(text, sections)
 
-            # LLM per-section
-            llm = audit_sections_with_llm(audit.model, sections)
+            # LLM per-section (параллельно + кеш)
+            llm = audit_sections_with_llm_parallel(audit.model, sections)
 
             # flatten & summarize
             flat = flatten_issues(det, llm)
@@ -603,14 +657,12 @@ def run_audit_job(audit_id: str):
                 save_xlsx_report(out_xlsx, report)
                 audit.output_xlsx_path = out_xlsx
 
-            # persist json blobs
             audit.summary_json = json.dumps(summary, ensure_ascii=False)
             audit.sections_json = json.dumps(list(sections.keys()), ensure_ascii=False)
             audit.deterministic_issues_json = json.dumps(det, ensure_ascii=False)
             audit.llm_by_section_json = json.dumps(llm, ensure_ascii=False)
             audit.issues_flat_json = json.dumps(flat, ensure_ascii=False)
 
-            # optional: annotate now
             if audit.want_annotate:
                 base, ext = os.path.splitext(audit.input_path.lower())
                 out_path = os.path.join(workdir, f"annot{ext}")
@@ -634,7 +686,7 @@ def run_audit_job(audit_id: str):
 # ----------------------- Root ---------------------------
 @app.get("/")
 def root():
-    return {"name": "med-audit API", "version": "1.0", "endpoints": [
+    return {"name": "med-audit API (fast)", "version": "1.2", "endpoints": [
         "GET /health",
         "GET /api/v1/models",
         "POST /api/v1/audits (multipart: file, model, xlsx, annotate)",
