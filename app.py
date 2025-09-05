@@ -1,31 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-med-audit API — FastAPI + Ollama + SQLite (ускоренная)
-- Быстрее извлекает текст из PDF (PyMuPDF вместо pdfplumber)
-- Параллелит LLM-проверки по разделам (ThreadPool)
-- Держит модель в памяти (keep_alive) и HTTP keep-alive (httpx)
-- Кеширует ответы LLM по хэшу секции (SQLite)
-- Оптимизирует SQLite (WAL, synchronous=NORMAL)
+med-audit API — FastAPI + OpenAI (ChatGPT-5) + SQLite
+Single-file backend that:
+- accepts a DOCX/PDF/TXT, model name and options
+- runs the audit (deterministic checks + LLM via OpenAI GPT-5)
+- stores task status/results in DB
+- can generate XLSX report and annotated copy (PDF/DOCX)
 
-Установка:
-  python -m pip install fastapi uvicorn sqlalchemy httpx python-docx pymupdf openpyxl pydantic-settings
-  # опционально: pdfplumber больше не обязателен
-  export OLLAMA_BASE_URL=http://localhost:11434
-  uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+Run:
+  python -m pip install fastapi uvicorn sqlalchemy python-docx pdfplumber openpyxl pymupdf pydantic-settings openai python-multipart
+  export OPENAI_API_KEY=sk-...
+  # optionally: export OPENAI_BASE_URL=https://api.openai.com/v1
+  uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
-Переменные окружения:
-  AUDIT_CONCURRENCY=4       # параллельные запросы к Ollama
-  MAX_SECTION_CHARS=8000    # обрезка текста секции
-  OLLAMA_KEEP_ALIVE=5m      # сколько держать модель в памяти на стороне Ollama
+Example:
+  curl -F "file=@инфекция.pdf" -F "model=gpt-5-mini" -F "xlsx=true" -F "annotate=true" \
+       -F "citations=true" -F "standards_mode=custom" -F "standards=RK-40-2023-INF" \
+       http://localhost:8000/api/v1/audits
+
+Download:
+  GET /api/v1/audits/{id}
+  GET /api/v1/audits/{id}/issues
+  GET /api/v1/audits/{id}/download?kind=json|xlsx|annotated
 """
 
 from __future__ import annotations
-import enum, json, os, re, uuid, datetime, logging, hashlib
+import enum, io, json, os, re, uuid, datetime, logging, sqlite3
 from typing import Dict, Any, List, Tuple, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import httpx
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -33,24 +36,22 @@ from pydantic_settings import BaseSettings
 from fastapi.middleware.cors import CORSMiddleware
 
 from sqlalchemy import (
-    create_engine, Column, String, DateTime, Text, Enum as SAEnum, Boolean, event
+    create_engine, Column, String, DateTime, Text, Enum as SAEnum, Integer, Boolean
 )
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-# ----------------------- Settings -----------------------
+# --------------- Settings -----------------
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./med_audit.db"
     STORAGE_DIR: str = "./storage"
-    OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    DEFAULT_MODEL: str = "llama3.1:8b"
-    MAX_SECTION_CHARS: int = int(os.environ.get("MAX_SECTION_CHARS", 8000))
-    AUDIT_CONCURRENCY: int = int(os.environ.get("AUDIT_CONCURRENCY", 4))
-    OLLAMA_KEEP_ALIVE: str = os.environ.get("OLLAMA_KEEP_ALIVE", "5m")
+    OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    DEFAULT_MODEL: str = "gpt-5-mini"  # gpt-5 | gpt-5-mini | gpt-5-nano | gpt-5-chat-latest
+    MAX_SECTION_CHARS: int = 18000
 
 settings = Settings()
 os.makedirs(settings.STORAGE_DIR, exist_ok=True)
 
-# ----------------------- DB ----------------------------
+# --------------- DB ------------------------
 Base = declarative_base()
 
 class AuditStatus(str, enum.Enum):
@@ -84,46 +85,51 @@ class Audit(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
 
+    # options
     want_xlsx = Column(Boolean, default=False)
     want_annotate = Column(Boolean, default=False)
 
-class LLMCache(Base):
-    __tablename__ = "llm_cache"
-    key = Column(String, primary_key=True)  # sha256(model+section+text)
-    value = Column(Text)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    # new options for GPT-5 edition
+    provider = Column(String, default="openai")            # reserved
+    citations_enabled = Column(Boolean, default=True)
+    norm_mode = Column(String, default="auto")             # auto|all|custom
+    norm_codes_json = Column(Text)                         # JSON array of codes
+    locale = Column(String, default="ru-KZ")
+    reasoning_effort = Column(String, default="minimal")   # minimal|medium|high (encoded in prompt)
+    verbosity = Column(String, default="low")              # low|medium|high (encoded in prompt)
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    future=True,
-    connect_args={"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {},
-)
-
-@event.listens_for(engine, "connect")
-def _set_sqlite_pragma(dbapi_connection, connection_record):
-    try:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL;")
-        cursor.execute("PRAGMA synchronous=NORMAL;")
-        cursor.execute("PRAGMA temp_store=MEMORY;")
-        cursor.execute("PRAGMA mmap_size=134217728;")
-        cursor.close()
-    except Exception:
-        pass
-
+engine = create_engine(settings.DATABASE_URL, future=True)
 Base.metadata.create_all(engine)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
-# ----------------------- App init ----------------------
-app = FastAPI(title="med-audit API (fast)", version="1.2")
-app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
+def _ensure_new_columns_sqlite():
+    # lightweight migration for existing SQLite DB
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as conn:
+        cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info('audits');")]
+        def add(col_def: str):
+            try:
+                conn.exec_driver_sql(f"ALTER TABLE audits ADD COLUMN {col_def};")
+            except Exception:
+                pass
+        if "provider" not in cols: add("provider TEXT DEFAULT 'openai'")
+        if "citations_enabled" not in cols: add("citations_enabled BOOLEAN DEFAULT 1")
+        if "norm_mode" not in cols: add("norm_mode TEXT DEFAULT 'auto'")
+        if "norm_codes_json" not in cols: add("norm_codes_json TEXT")
+        if "locale" not in cols: add("locale TEXT DEFAULT 'ru-KZ'")
+        if "reasoning_effort" not in cols: add("reasoning_effort TEXT DEFAULT 'minimal'")
+        if "verbosity" not in cols: add("verbosity TEXT DEFAULT 'low'")
+
+_ensure_new_columns_sqlite()
+
+# --------------- App -----------------------
+app = FastAPI(title="med-audit API (GPT-5 edition)", version="1.1")
 log = logging.getLogger("med-audit")
 logging.basicConfig(level=logging.INFO)
+app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
-# HTTP client с keep-alive и HTTP/2
-HTTP = httpx.Client(base_url=settings.OLLAMA_BASE_URL, timeout=300, http2=True)
-
-# ----------------------- Utils: read & normalize --------
+# --------------- Utils: read/normalize -----
 def read_text(path: str) -> str:
     ext = os.path.splitext(path.lower())[1]
     if ext == ".docx":
@@ -131,12 +137,12 @@ def read_text(path: str) -> str:
         doc = Document(path)
         return "\n".join(p.text for p in doc.paragraphs)
     elif ext == ".pdf":
-        import fitz  # PyMuPDF — быстрее, чем pdfplumber/pdfminer
-        doc = fitz.open(path)
+        # pdfplumber is robust for text-based PDFs; for speed OCR-free, it’s OK.
+        import pdfplumber
         text = []
-        for page in doc:
-            text.append(page.get_text("text") or "")
-        doc.close()
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text.append(page.extract_text() or "")
         return "\n".join(text)
     else:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -148,7 +154,7 @@ def norm_text(s: str) -> str:
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
-# ----------------------- Split to sections --------------
+# --------------- Sections -------------------
 SECTION_PATTERNS: List[Tuple[str,str]] = [
     ("Титул/шапка", r"(?:^|\n)(?:Медицинская документация|СТАЦИОНАРЛЫҚ|ФОРМА\s*№\s*001|ИИН|Фамилия)"),
     ("Триаж", r"(?:^|\n)Триаж"),
@@ -171,7 +177,6 @@ def split_sections(text: str) -> Dict[str, str]:
     marks.sort()
     if not marks:
         return {"Документ целиком": text}
-
     sections: Dict[str,str] = {}
     for i, (start, name) in enumerate(marks):
         end = marks[i+1][0] if i+1 < len(marks) else len(text)
@@ -180,7 +185,8 @@ def split_sections(text: str) -> Dict[str, str]:
             sections[name] = chunk
     return sections
 
-# ----------------------- Deterministic checks -----------
+# --------------- Deterministic checks ------
+DATE_RE = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
 ICD_RE  = re.compile(r"\b([A-TV-ZА-ЯЁ]{1}\d{2}(?:\.\d)?)\b", re.IGNORECASE)
 BOX_RE  = re.compile(r"(?:Бокс|Палата)\s*№\s*([0-9]+)")
 
@@ -203,7 +209,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "evidence":f"Встречаются разные годы: {counts}",
             "fix":"Привести все даты к фактическому году госпитализации."
         })
-
     icds = extract_icd(full_text)
     if ("тонзиллит" in full_text.lower()) or ("лакунарн" in full_text.lower()) or ("паратонзилл" in full_text.lower()):
         wrong_b = any(code.upper().startswith("B") for code in icds)
@@ -215,7 +220,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
                 "evidence":f"Обнаружены коды: {icds}",
                 "fix":"Для острого тонзиллита — J03.x; для паратонзиллярного абсцесса/целлюлита — J36."
             })
-
     boxes = extract_boxes(full_text)
     if len(boxes) > 1:
         issues.append({
@@ -225,7 +229,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "evidence":f"Встречаются номера: {boxes}",
             "fix":"Унифицировать место; при переводах — отдельная запись с датой/временем."
         })
-
     triage = sections.get("Триаж", "")
     if triage and ("Пациент должен быть изолирован" in triage) and not re.search(r"изолирован:\s*(Да|Нет)", triage, re.IGNORECASE):
         issues.append({
@@ -235,7 +238,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "evidence":"В форме триажа есть поле, но нет выбранного ‘Да/Нет’.",
             "fix":"Отметить и указать режим изоляции (контактный/капельный)."
         })
-
     plan = sections.get("Осмотр приёмного покоя", "") + "\n" + sections.get("Первичный осмотр", "")
     orders = sections.get("Лист назначений", "")
     if plan and orders:
@@ -249,7 +251,6 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
                 "evidence":"В плане — цефтриаксон; в листе назначений не найден.",
                 "fix":"Добавить фактические инъекции или оформить смену схемы на per os (step-down)."
             })
-
     lab_orders = sections.get("Назначения на исследования", "")
     labs_results = sections.get("Результаты исследований", "")
     if lab_orders and (not labs_results or len(labs_results) < 50):
@@ -260,108 +261,141 @@ def deterministic_checks(full_text: str, sections: Dict[str,str]) -> List[Dict[s
             "evidence":"Лист назначений на исследования заполнен, раздел результатов пуст/скуден.",
             "fix":"Подшить результаты и дать интерпретацию в дневниках."
         })
-
     return issues
 
-# ----------------------- Ollama chat (параллельно + кеш) --------
-OLLAMA_CHAT_PATH = "/api/chat"
+# --------------- Normative profiles ---------------------
+NORMATIVE_MAP: Dict[str, str] = {
+    "RK-DSМ-27-2022": "Приказ МЗ РК № ҚР-ДСМ-27 от 24.03.2022 — Стационарные условия",
+    "RK-106-2023": "Приказ МЗ РК № 106 от 07.06.2023 — Стационарозамещающие условия",
+    "RK-41-2023-SURG": "№ 41 от 20.03.2023 — Хирургическая помощь",
+    "RK-92-2021-OBGYN": "№ ҚР ДСМ-92 от 26.08.2021 — Акушерско-гинекологическая помощь",
+    "RK-45-2023-RHEUM": "№ 45 от 28.03.2023 — Ревматологическая помощь",
+    "RK-53-2025-NEURO": "№ 53 от 04.06.2025 — Неврологическая помощь (взрослые)",
+    "RK-52-2023-NEONAT": "№ 52 от 31.03.2023 — Неонатальная помощь",
+    "RK-139-2021-CARDIO": "№ ҚР ДСМ-139 от 31.12.2021 — Кардио/интервенционная/аритм/кардиохирургия",
+    "RK-114-2022-NEPHRO": "№ ҚР ДСМ-114 от 14.10.2022 — Нефрологическая помощь",
+    "RK-27-2021-EMERGENCY": "№ ҚР ДСМ-27 от 02.04.2021 — Экстренная помощь в приёмных отделениях",
+    "RK-78-2023-ANESTH": "№ 78 от 26.04.2023 — Анестезиология и реаниматология",
+    "RK-40-2023-INF": "№ 40 от 17.03.2023 — Инфекционные заболевания",
+    "RK-114-2021-SANPIN": "№ ҚР ДСМ-114 от 12.11.2021 — Санитарные правила (ООИ)",
+    "RK-108-2020-SOC": "№ ҚР ДСМ-108/2020 от 23.09.2020 — Перечень социально значимых заболеваний",
+    "RK-83-2023-URO": "№ 83 от 18.05.2023 — Урологическая и андрологическая помощь",
+    "RK-48-2023-GASTRO": "№ 48 от 29.03.2023 — Гастроэнтерология и гепатология",
+    "RK-47-2025-PULMO": "№ 47 от 28.05.2025 — Пульмонологическая помощь",
+    "RK-25-2022-PEDS": "№ ҚР ДСМ-25 от 15.03.2022 — Педиатрическая помощь",
+    "RK-81-2023-PEDSURG": "№ 81 от 15.05.2023 — Детская хирургическая помощь",
+    "RK-1-2022-TRAUMA": "№ ҚР ДСМ-1 от 06.01.2022 — Травматология и ортопедия",
+    "RK-20-2022-NEUROSURG": "№ ҚР ДСМ-20 от 28.02.2022 — Нейрохирургическая помощь",
+    "RK-149-2020-CHRONIC": "№ ҚР ДСМ-149/2020 от 23.10.2020 — Хронические заболевания, наблюдение",
+    "RK-130-2021-HEM": "№ ҚР ДСМ-130 от 20.12.2021 — Гематология (взрослые)",
+    "RK-60-2024-PEDONCO": "№ 60 от 13.08.2024 — Детская онко-гематология",
+    "RK-112-2021-ONCO": "№ ҚР ДСМ-112 от 12.11.2021 — Онкологическая помощь",
+}
 
-def _hash_key(model: str, section_name: str, text: str) -> str:
-    h = hashlib.sha256()
-    h.update(model.encode("utf-8"))
-    h.update(b"\0"); h.update(section_name.encode("utf-8"))
-    h.update(b"\0"); h.update(text.encode("utf-8"))
-    return h.hexdigest()
+def build_normative_context(codes: List[str], mode: str) -> str:
+    if mode == "all":
+        selected = list(NORMATIVE_MAP.keys())
+    else:
+        selected = codes or []
+    human = [f"- {c}: {NORMATIVE_MAP.get(c, 'UNKNOWN')}" for c in selected]
+    if not human and mode == "auto":
+        # let the model choose; we still describe the catalogue
+        catalogue = "\n".join([f"- {c}: {t}" for c, t in NORMATIVE_MAP.items()])
+        return ("Каталог нормативов доступен (автовыбор по контексту):\n" + catalogue +
+                "\nЕсли точная ссылка неизвестна, оставь поля ref/quote пустыми.")
+    return ("Проверяй документ на соответствие следующим нормативам (если точная ссылка неизвестна — оставь ref/quote пустыми):\n" +
+            "\n".join(human))
 
-def cache_get(key: str) -> Optional[dict]:
-    with SessionLocal() as db:
-        row = db.get(LLMCache, key)
-        if row and row.value:
-            try:
-                return json.loads(row.value)
-            except Exception:
-                return None
-    return None
+# --------------- OpenAI (ChatGPT-5) --------------------
+from openai import OpenAI
+_openai_client = None
 
-def cache_set(key: str, value: dict):
-    with SessionLocal() as db:
-        db.merge(LLMCache(key=key, value=json.dumps(value, ensure_ascii=False)))
-        db.commit()
+def get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(base_url=settings.OPENAI_BASE_URL)
+    return _openai_client
 
-SECTION_PROMPT = (
-    "Ты — медицинский аудитор стационара (инфекционный профиль) в РК.\n"
-    "Проверь фрагмент истории болезни строго по чек-листу: прием, эпиданамнез, триаж/изоляция, дневники, назначения (дозы/кратность/подписи и отметки выполнения), исследования (что назначено, что выполнено, интерпретация), инфекционный контроль, переводы/боксы/палаты, выписка/эпикриз/рекомендации/лист нетрудоспособности.\n"
-    "Ищи противоречия (даты/годы, разные боксы без записи перевода, диагноз vs МКБ vs назначения, ‘в плане есть — в листе нет’, ‘в результатах пусто’ и т.д.).\n\n"
+SECTION_PROMPT_BASE = (
+    "Ты — медицинский аудитор стационара РК. Проверь фрагмент истории болезни по чек-листу: "
+    "приём, эпиданамнез, триаж/изоляция, дневники, назначения (дозы/кратность/подписи/отметки выполнения), "
+    "исследования (назначено/выполнено/интерпретация), инфекционный контроль, переводы/боксы/палаты, "
+    "выписка/эпикриз/рекомендации/лист нетрудоспособности. "
+    "Ищи противоречия (даты/годы, разные боксы без перевода, диагноз vs МКБ vs назначения, "
+    "«в плане есть — в листе нет», «в результатах пусто» и т.п.).\n\n"
     "Верни СТРОГО JSON по схеме:\n"
-    "{\n  \"section\": \"<название раздела>\",\n  \"issues\": [\n    {\n      \"severity\": \"critical|major|minor\",\n      \"title\": \"...\",\n      \"evidence\": \"короткая цитата/факт из текста\",\n      \"fix\": \"конкретное исправление одной фразой\"\n    }\n  ]\n}\n"
-    "Без пояснений и рассуждений."
+    "{\n"
+    '  "section": "<название раздела>",\n'
+    '  "issues": [\n'
+    '    {\n'
+    '      "severity": "critical|major|minor",\n'
+    '      "title": "...",\n'
+    '      "evidence": "короткая цитата/факт из текста",\n'
+    '      "fix": "конкретное исправление одной фразой",\n'
+    '      "citations": [\n'
+    '        { "standard": "код_норматива", "ref": "пункт/раздел", "quote": "краткая выдержка (если известна)" }\n'
+    '      ]\n'
+    "    }\n"
+    "  ]\n"
+    "}\n"
+    "Никаких пояснений вне JSON. Если нет нарушений — верни пустой массив issues."
 )
 
-def _ollama_chat_sync(model: str, user_content: str) -> Dict[str,Any]:
-    body = {
-        "model": model,
-        "messages": [
-            {"role":"system","content": SECTION_PROMPT},
-            {"role":"user","content": user_content}
-        ],
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0, "num_ctx": 4096},
-        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
-    }
-    r = HTTP.post(OLLAMA_CHAT_PATH, json=body)
-    r.raise_for_status()
-    data = r.json()
-    try:
-        content = data["message"]["content"]
-        return json.loads(content)
-    except Exception:
-        return {"error":"bad_json_from_model","raw":data}
+def make_system_prompt(locale: str, effort: str, verbosity: str, normative_context: str, citations: bool) -> str:
+    parts = [SECTION_PROMPT_BASE]
+    parts.append(f"Локаль документа: {locale}.")
+    parts.append(f"Режим рассуждений: {effort} (описательный параметр). Краткость ответа: {verbosity}.")
+    if citations:
+        parts.append("Добавляй citations к каждому пункту, если уверенно знаешь стандарт; иначе оставляй ref/quote пустыми.")
+    else:
+        parts.append("Поле citations можно опускать.")
+    parts.append("\nНормативная база:\n" + normative_context)
+    return "\n".join(parts)
 
-def audit_sections_with_llm_parallel(model: str, sections: Dict[str,str]) -> List[Dict[str,Any]]:
-    tasks = []
+def openai_chat_json(model: str, system: str, user: str) -> Dict[str, Any]:
+    client = get_openai_client()
+    try:
+        # primary attempt: ask model to return strict JSON; no temperature (avoid 400 on certain models)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            # Do NOT set temperature to 0 for models that don't support custom temperature.
+            # response_format is optional; we keep it prompt-enforced to avoid incompatibilities.
+        )
+        content = resp.choices[0].message.content
+        return json.loads(content)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"openai_error: {e}")
+
+def audit_sections_with_llm(model: str,
+                            sections: Dict[str,str],
+                            locale: str,
+                            reasoning_effort: str,
+                            verbosity: str,
+                            citations_enabled: bool,
+                            norm_mode: str,
+                            norm_codes: List[str]) -> List[Dict[str,Any]]:
+    results: List[Dict[str,Any]] = []
+    normative_context = build_normative_context(norm_codes, norm_mode)
+    system = make_system_prompt(locale, reasoning_effort, verbosity, normative_context, citations_enabled)
     for name, chunk in sections.items():
         short = chunk if len(chunk) < settings.MAX_SECTION_CHARS else chunk[:settings.MAX_SECTION_CHARS]
-        key = _hash_key(model, name, short)
-        cached = cache_get(key)
-        if cached is not None:
-            if isinstance(cached, dict) and "issues" in cached:
-                cached["section"] = cached.get("section", name)
-                tasks.append((name, None, key, cached))
-                continue
         user = f"Раздел: {name}\n\nТекст:\n<<<\n{short}\n>>>\n"
-        tasks.append((name, user, key, None))
-
-    results: List[Dict[str,Any]] = []
-
-    def worker(name_user_key):
-        name, user, key, already = name_user_key
-        if already is not None:
-            return already
-        res = _ollama_chat_sync(model, user)
-        if isinstance(res, dict):
-            cache_set(key, res)
+        res = openai_chat_json("gpt-5-mini", system, user)
         if isinstance(res, dict) and "issues" in res:
             res["section"] = res.get("section", name)
-            return res
-        return {"section": name, "issues": [{"severity":"minor","title":"Модель вернула нечитаемый JSON","evidence":str(res)[:500],"fix":"Повторить прогон/уменьшить фрагмент"}]}
-
-    to_call = [t for t in tasks if t[1] is not None]
-    cached_ready = [t[3] for t in tasks if t[1] is None]
-    results.extend(cached_ready)
-
-    if to_call:
-        workers = max(1, settings.AUDIT_CONCURRENCY)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(worker, t) for t in to_call]
-            for fut in as_completed(futures):
-                results.append(fut.result())
-
-    order = list(sections.keys())
-    results.sort(key=lambda x: order.index(x.get("section","")) if x.get("section","") in order else 1e9)
+            results.append(res)
+        else:
+            results.append({
+                "section": name,
+                "issues": [{"severity":"minor","title":"Модель вернула нечитаемый JSON","evidence":str(res)[:500],"fix":"Повторить прогон/уменьшить фрагмент"}]
+            })
     return results
 
-# ----------------------- Reports ------------------------
+# --------------- Reports -------------------
 def flatten_issues(det_issues: List[Dict[str,Any]], llm_blocks: List[Dict[str,Any]]):
     arr: List[Dict[str,Any]] = []
     for it in det_issues:
@@ -386,46 +420,49 @@ def save_xlsx_report(path: str, report: Dict[str,Any]):
     wb = Workbook()
     ws = wb.active
     ws.title = "Issues"
-    ws.append(["Severity","Section","Title","Evidence","Fix"])
+    ws.append(["Severity","Section","Title","Evidence","Fix","Standard","Ref"])
     for issue in report["issues_flat"]:
-        ws.append([issue.get("severity"), issue.get("section"), issue.get("title"), issue.get("evidence"), issue.get("fix")])
+        cits = issue.get("citations") or []
+        if not isinstance(cits, list): cits = []
+        if cits:
+            for c in cits:
+                ws.append([issue.get("severity"), issue.get("section"),
+                           issue.get("title"), issue.get("evidence"),
+                           issue.get("fix"), c.get("standard",""), c.get("ref","")])
+        else:
+            ws.append([issue.get("severity"), issue.get("section"),
+                       issue.get("title"), issue.get("evidence"),
+                       issue.get("fix"), "", ""])
     wb.save(path)
 
-# ----------------------- Annotation ---------------------
+# --------------- Annotation -----------------
 def annotate_pdf(pdf_path: str, issues: List[Dict[str,Any]], out_path: str):
     import fitz  # PyMuPDF
     doc = fitz.open(pdf_path)
-
     def add_note(page, rect, title, content):
         ann = page.add_highlight_annot(rect)
         ann.set_info(title=title, content=content)
-
     for it in issues:
         ev = (it.get("evidence") or "").strip()
-        if not ev:
-            continue
+        if not ev: continue
         title = f"[{(it.get('severity') or '?').upper()}] {it.get('title','Issue')}"
         fix   = it.get("fix","")
         candidates = [ev]
-        if len(ev) > 120:
-            candidates.append(ev[:120])
-        if len(ev) > 60:
-            candidates.append(ev[:60])
+        if len(ev) > 120: candidates.append(ev[:120])
+        if len(ev) > 60: candidates.append(ev[:60])
         found = False
         for page in doc:
             for cand in candidates:
                 cand = cand.strip()
-                if not cand:
-                    continue
+                if not cand: continue
                 rects = page.search_for(cand, quads=False)
                 if rects:
                     for r in rects:
                         add_note(page, r, title, f"Fix: {fix}")
                     found = True
                     break
-            if found:
-                break
-        if not found and ev:
+            if found: break
+        if not found:
             words = [w for w in re.split(r"\s+", ev) if len(w) > 3][:6]
             for page in doc:
                 hit_rects = []
@@ -447,27 +484,25 @@ from docx.enum.text import WD_COLOR_INDEX
 def annotate_docx(docx_path: str, issues: List[Dict[str,Any]], out_path: str):
     from docx import Document
     doc = Document(docx_path)
-
     def highlight_substring_in_paragraph(p, needle: str, note_text: str):
         text = p.text
         idx = text.find(needle)
         if idx < 0:
             return False
         before, mid, after = text[:idx], text[idx:idx+len(needle)], text[idx+len(needle):]
-        for _ in range(len(p.runs)-1, -1, -1):
-            r = p.runs[_]
+        # Replace paragraph runs to inject highlight
+        for i in range(len(p.runs)-1, -1, -1):
+            r = p.runs[i]
             r.clear()
             r._element.getparent().remove(r._element)
-        p.add_run(before)
+        r1 = p.add_run(before)
         r2 = p.add_run(mid); r2.font.highlight_color = WD_COLOR_INDEX.YELLOW
-        p.add_run(after)
+        r3 = p.add_run(after)
         p.add_run(f"  [AUDIT] {note_text}").font.highlight_color = WD_COLOR_INDEX.YELLOW
         return True
-
     for it in issues:
         ev = (it.get("evidence") or "").strip()
-        if not ev:
-            continue
+        if not ev: continue
         short_ev = ev[:120] if len(ev) > 120 else ev
         note = f"{(it.get('severity') or '?').upper()}: {it.get('title','Issue')} | Fix: {it.get('fix','')}"
         done = False
@@ -484,10 +519,9 @@ def annotate_docx(docx_path: str, issues: List[Dict[str,Any]], out_path: str):
                         p.runs[0].font.highlight_color = WD_COLOR_INDEX.YELLOW
                     p.add_run(f"  [AUDIT] {note}").font.highlight_color = WD_COLOR_INDEX.YELLOW
                     break
-
     doc.save(out_path)
 
-# ----------------------- Schemas ------------------------
+# --------------- Schemas -------------------
 class AuditCreateResp(BaseModel):
     id: str
     status: AuditStatus
@@ -504,32 +538,46 @@ class AuditResp(BaseModel):
     sections: Optional[List[str]] = None
     error: Optional[str] = None
 
-# ----------------------- API ----------------------------
+# --------------- API -----------------------
 @app.get("/health")
 def health():
-    return {"ok": True, "ollama": settings.OLLAMA_BASE_URL}
+    return {"ok": True, "provider": "openai", "model_default": settings.DEFAULT_MODEL}
 
 @app.get("/api/v1/models")
 def list_models():
-    try:
-        r = HTTP.get("/api/tags")
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ollama not reachable: {e}")
+    # Static subset; you can extend via OpenAI Models API if нужно
+    return {"models": ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-chat-latest"]}
 
 @app.post("/api/v1/audits", response_model=AuditCreateResp)
 def create_audit(background_tasks: BackgroundTasks,
                  file: UploadFile = File(...),
                  model: str = Form(settings.DEFAULT_MODEL),
                  xlsx: bool = Form(False),
-                 annotate: bool = Form(False)):
+                 annotate: bool = Form(False),
+                 citations: bool = Form(True),
+                 locale: str = Form("ru-KZ"),
+                 reasoning_effort: str = Form("minimal"),   # minimal|medium|high
+                 verbosity: str = Form("low"),              # low|medium|high
+                 standards_mode: str = Form("auto"),        # auto|all|custom
+                 standards: List[str] = Form([])):
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not set")
+    if standards_mode not in ("auto","all","custom"):
+        raise HTTPException(status_code=400, detail="Invalid standards_mode")
+    if standards_mode == "custom" and not standards:
+        raise HTTPException(status_code=400, detail="standards_mode=custom requires standards[]")
+    # persist file
     with SessionLocal() as db:
-        audit = Audit(model=model, status=AuditStatus.queued, want_xlsx=xlsx, want_annotate=annotate)
+        audit = Audit(model=model, status=AuditStatus.queued,
+                      want_xlsx=xlsx, want_annotate=annotate,
+                      citations_enabled=citations, norm_mode=standards_mode,
+                      norm_codes_json=json.dumps(standards, ensure_ascii=False),
+                      locale=locale, reasoning_effort=reasoning_effort, verbosity=verbosity)
         audit.input_name = file.filename
         audit.input_mime = file.content_type
         db.add(audit); db.commit(); db.refresh(audit)
 
+        # save to storage dir
         workdir = os.path.join(settings.STORAGE_DIR, audit.id)
         os.makedirs(workdir, exist_ok=True)
         in_ext = os.path.splitext(file.filename or "")[1] or ".bin"
@@ -539,6 +587,7 @@ def create_audit(background_tasks: BackgroundTasks,
         audit.input_path = in_path
         db.commit()
 
+        # schedule background processing
         background_tasks.add_task(run_audit_job, audit.id)
         return AuditCreateResp(id=audit.id, status=audit.status, model=audit.model)
 
@@ -611,7 +660,7 @@ def download(audit_id: str, kind: str = Query(..., regex="^(json|xlsx|annotated)
         filename = os.path.basename(path)
         return FileResponse(path, media_type=media, filename=filename)
 
-# ----------------------- Job runner ---------------------
+# --------------- Job runner ----------------
 def run_audit_job(audit_id: str):
     log.info(f"run_audit_job: {audit_id}")
     with SessionLocal() as db:
@@ -630,8 +679,21 @@ def run_audit_job(audit_id: str):
             # deterministic
             det = deterministic_checks(text, sections)
 
-            # LLM per-section (параллельно + кеш)
-            llm = audit_sections_with_llm_parallel(audit.model, sections)
+            # LLM per-section (GPT-5)
+            codes = []
+            try:
+                codes = json.loads(audit.norm_codes_json) if audit.norm_codes_json else []
+            except Exception:
+                codes = []
+            llm = audit_sections_with_llm(
+                audit.model, sections,
+                locale=audit.locale,
+                reasoning_effort=audit.reasoning_effort,
+                verbosity=audit.verbosity,
+                citations_enabled=audit.citations_enabled,
+                norm_mode=audit.norm_mode,
+                norm_codes=codes
+            )
 
             # flatten & summarize
             flat = flatten_issues(det, llm)
@@ -657,6 +719,7 @@ def run_audit_job(audit_id: str):
                 save_xlsx_report(out_xlsx, report)
                 audit.output_xlsx_path = out_xlsx
 
+            # persist json blobs
             audit.summary_json = json.dumps(summary, ensure_ascii=False)
             audit.sections_json = json.dumps(list(sections.keys()), ensure_ascii=False)
             audit.deterministic_issues_json = json.dumps(det, ensure_ascii=False)
@@ -683,13 +746,13 @@ def run_audit_job(audit_id: str):
             audit.error = str(e)
             db.commit()
 
-# ----------------------- Root ---------------------------
+# --------------- Root ----------------------
 @app.get("/")
 def root():
-    return {"name": "med-audit API (fast)", "version": "1.2", "endpoints": [
+    return {"name": "med-audit API (GPT-5 edition)", "version": "1.1", "endpoints": [
         "GET /health",
         "GET /api/v1/models",
-        "POST /api/v1/audits (multipart: file, model, xlsx, annotate)",
+        "POST /api/v1/audits (multipart: file, model, xlsx, annotate, citations, locale, reasoning_effort, verbosity, standards_mode, standards[])",
         "GET /api/v1/audits/{id}",
         "GET /api/v1/audits/{id}/issues",
         "POST /api/v1/audits/{id}/annotate",
