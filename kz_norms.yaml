@@ -1,0 +1,163 @@
+acts:
+- id: V2000021579
+  title: Приказ и.о. Министра здравоохранения РК от 30.10.2020 № ҚР ДСМ-175/2020
+  aka:
+  - КР ДСМ-175/2020
+  - № ҚР ДСМ-175/2020
+  scope: Формы учетной документации и инструкции по заполнению (в т.ч. 001/у)
+  effective_from: '2020-11-14'
+  last_amended: '2025-03-02'
+  checks:
+  - type: regex_present_in_paragraphs
+    pattern: №\s*ҚР\s*ДСМ-175/2020|№\s*КР\s*ДСМ-175/2020
+    severity: warning
+    message: В документе нет явной ссылки на приказ № ҚР ДСМ-175/2020 и форму 001/у.
+    fields:
+    - paragraphs
+  - type: regex_present_in_paragraphs
+    pattern: ФОРМА\s*№\s*0{0,2}01/У|МЕДИЦИНСКАЯ КАРТА СТАЦИОНАРНОГО ПАЦИЕНТА
+    severity: error
+    message: Отсутствует обязательная шапка формы № 001/у («Медицинская карта стационарного
+      пациента»).
+    fields:
+    - paragraphs
+  - type: key_required_any_alias
+    target: iin
+    severity: error
+    message: В шапке формы отсутствует ИИН пациента (обязательное поле).
+  - type: key_required_any_alias
+    target: full_name
+    severity: error
+    message: Отсутствует ФИО пациента (обязательное поле).
+  - type: key_required_any_alias
+    target: dob
+    severity: error
+    message: Отсутствует дата рождения (обязательное поле).
+  - type: key_required_any_alias
+    target: sex
+    severity: error
+    message: Отсутствует пол (обязательное поле).
+  - type: key_required_any_alias
+    target: department
+    severity: error
+    message: Отсутствует отделение/палата (обязательное поле).
+  - type: regex_present_in_paragraphs
+    pattern: ЛИСТ ВРАЧЕБНЫХ НАЗНАЧЕНИЙ
+    severity: error
+    message: Отсутствует «Лист врачебных назначений» (часть формы 001/у).
+    fields:
+    - paragraphs
+- id: V2200027218
+  title: Приказ МЗ РК от 24.03.2022 № ҚР-ДСМ-27 (Стандарт стационарной помощи)
+  aka:
+  - № ҚР-ДСМ-27
+  - ДСМ-27
+  scope: Стандарт организации оказания медицинской помощи в стационарных условиях
+  effective_from: '2022-04-04'
+  last_amended: '2024-06-24'
+  checks:
+  - type: key_required_any_alias
+    target: admit_dt
+    severity: error
+    message: В стационарной карте должен быть указан факт госпитализации (дата поступления).
+  - type: date_order_rule
+    a: admit_dt
+    b: discharge_dt
+    allow_equal: true
+    severity: error
+    message: Дата выписки не может предшествовать дате поступления.
+  - type: key_required_any_alias
+    target: diagnosis
+    severity: error
+    message: Должен быть указан диагноз (клинический/заключительный).
+- id: V2300032740
+  title: Приказ МЗ РК от 07.06.2023 № 106 (Стационарозамещающие условия)
+  aka:
+  - № 106 от 07.06.2023
+  scope: Стандарт оказания помощи в стационарозамещающих условиях
+  effective_from: '2023-06-18'
+  last_amended: '2023-11-15'
+  checks:
+  - type: conditional_regex_rule
+    if_pattern: дневн(ой|ом) стационар|стационарозамещающ
+    then_checks:
+    - type: key_required_any_alias
+      target: admit_dt
+      severity: error
+      message: Для стационарозамещающих условий требуется дата начала лечения.
+- id: CHECKLIST_INPATIENT_2025
+  title: Чек-лист стационарной документации (РК)
+  scope: Ежедневные записи, осмотры, назначения, эпикриз, консультативная и процедурная
+    документация, МСЭ, ЛН, перевод в ОРИТ и пр.
+  effective_from: '2025-01-01'
+  checks:
+  - type: per_day_keyword_with_date
+    pattern: (дневник|ежедневн|осмотр|лечащ(ий|его)\s+врач)
+    severity: error
+    message: Отсутствуют ежедневные записи лечащего врача за некоторые дни госпитализации
+  - type: per_day_vitals_presence
+    severity: warning
+    message: Не зафиксированы витальные показатели в некоторые дни (T/АД/Пульс/ЧДД/SpO2)
+  - type: night_duty_notes
+    severity: warning
+    message: Не обнаружены ночные/дежурные записи в дни с упоминанием дежурств
+  - type: head_rounds_schedule
+    severity: warning
+    message: Не соблюдён регламент осмотров заведующим (ежедневно для тяжёлых, ≥1/нед
+      для средней тяжести)
+  - type: dosage_patterns_in_prescription
+    severity: error
+    message: Лист назначений есть, но нет доз/кратности в явном виде
+  - type: regex_present_in_paragraphs
+    pattern: (ОАК|общий анализ крови|биохим|ПЦР|микробиолог|посев|КТ|УЗИ|рентген)
+    severity: warning
+    message: В истории не обнаружены упоминания результатов исследований (ОАК, биохимия,
+      ПЦР, КТ/УЗИ и пр.)
+  - type: conditional_regex_rule
+    if_pattern: (консульт|невролог|хирург|офтальмолог|лор|кардиолог|реаниматолог|анестезиолог|процедур|пункц|эндоскоп|биопс)
+    then_checks:
+    - type: regex_present_in_paragraphs
+      pattern: (заключени|протокол|согласие|информированн)
+      severity: warning
+      message: Есть указания на консультации/процедуры, но отсутствуют протоколы/заключения/согласие
+  - type: conditional_presence
+    if_pattern: (ОРИТ|реаним|интенсивн)
+    then_pattern: (выписн(ой|ая)\s+эпикриз|эпикриз\s+при\s+перевод|реаниматолог)
+    severity: error
+    message: Есть упоминание ОРИТ/реанимации, но нет эпикризов при переводе/записей
+      реаниматолога
+  - type: conditional_presence
+    if_pattern: (инвалид|стойк(ая|ое)\s+утрат|нетрудоспособн)
+    then_pattern: (МСЭ|ВТЭК|направлен(ие)?\s+на\s+МСЭ)
+    severity: warning
+    message: Есть признаки длительной нетрудоспособности/инвалидизации — нет сведений
+      о направлении на МСЭ
+  - type: regex_present_in_paragraphs
+    pattern: (подпис|врач\b|лечащий врач)
+    severity: warning
+    message: В записях нет явных отметок о подписи/ФИО врача
+  - type: presence_of_epicrisis
+    severity: error
+    message: Отсутствует выписной эпикриз или рекомендации при выписке
+  - type: regex_present_in_paragraphs
+    pattern: (направлен(ие)?\s+в\s+поликл|передан(ы)?\s+данные|ЕИСЗ|портал\s+бюро\s+госпитализац)
+    severity: warning
+    message: Нет явной отметки о передаче информации на амбулаторный этап (ЕИСЗ/поликлиника)
+  - type: age_conditional_presence
+    min: 18
+    max: 65
+    pattern: (листок\s+нетрудоспособност|больничн(ый|ого)|ЛН)
+    severity: warning
+    message: Пациент трудоспособного возраста — нет отметки о листке нетрудоспособности
+      (если показан)
+  - type: conditional_presence
+    if_pattern: (отказ(ался)?\s+от\s+лечени|самовольн(ая|о)\s+выписка|самоотпуск)
+    then_pattern: (заявлени|предупрежд(ен|ена)|акт\s+об\s+уходе)
+    severity: error
+    message: Есть отказ/самовольная выписка — отсутствуют заявление/акт/подписи
+  - type: conditional_presence
+    if_pattern: (смерт|летальн)
+    then_pattern: (посмертн(ый|ая)\s+эпикриз|106/у|медицинск(ое|ая)\s+свидетельство\s+о\s+смерти)
+    severity: error
+    message: При летальном исходе нет посмертного эпикриза/свидетельства о смерти
+      (106/у)

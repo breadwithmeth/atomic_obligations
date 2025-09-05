@@ -1,0 +1,33 @@
+meta:
+  profile_version: v1
+
+normalize:
+  date_formats: ["DD.MM.YYYY HH:mm", "DD.MM.YYYY", "YYYY-MM-DD", "YYYY-MM-DDTHH:mm"]
+  decimals: [",", "."]
+  routes:
+    iv: ["в/в","внутривенно","iv"]
+    im: ["в/м","внутримыш","im"]
+    sc: ["п/к","подкожно","sc"]
+    po: ["per os","п/о","peroral","po"]
+  synonyms:
+    roles:
+      date:   ["дата","date","время"]
+      time:   ["время","time"]
+      temp:   ["t","t°","темпера","температура"]
+      pulse:  ["пульс","чсс","жсс"]
+      bp:     ["ад","давлен","артериальн","ққ"]
+      drug:   ["препарат","наимен","лекарств","drug"]
+      dose:   ["доза","дозировка","dose"]
+      route:  ["путь","маршрут","route"]
+      freq:   ["кратн","частота","freq"]
+      exec:   ["исполн","подпись","м/с","медсестра","nurse"]
+
+constraints:
+  mkb10: '^[A-ZА-Я][0-9]{2}(?:\.[0-9A-ZА-Я]{1,2})?$'
+  asa:   '^(I|II|III|IV|V)$'
+
+merge:
+  vitals_daily:
+    key: ["date"]
+  orders:
+    key: ["drug","period_start"]

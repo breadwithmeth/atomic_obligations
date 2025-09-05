@@ -25,8 +25,8 @@
       "type": "generic",
       "created_dt": null,
       "source": {
-        "filename": "terapevt.docx",
-        "hash": "sha256:2b2d5450505ed735b219a426855fc64197f6f0a6fea65761b092926bcc38aea2"
+        "filename": "infection.docx",
+        "hash": "sha256:4e807523e81870acebb0a111ef3c14934c8800d9847d202d3d0eba5691e94ce8"
       },
       "lang": "ru",
       "text_ref": "raw://doc_000001",
@@ -34,17 +34,817 @@
     }
   ],
   "facts": {
-    "diagnoses": [],
+    "diagnoses": [
+      {
+        "code": "B34.9",
+        "evidence": [
+          "ev_000005"
+        ]
+      },
+      {
+        "code": "D19",
+        "evidence": [
+          "ev_000006"
+        ]
+      },
+      {
+        "code": "В12",
+        "evidence": [
+          "ev_000007"
+        ]
+      },
+      {
+        "code": "D19",
+        "evidence": [
+          "ev_000008"
+        ]
+      },
+      {
+        "code": "В12",
+        "evidence": [
+          "ev_000009"
+        ]
+      },
+      {
+        "code": "D19",
+        "evidence": [
+          "ev_000010"
+        ]
+      },
+      {
+        "code": "В12",
+        "evidence": [
+          "ev_000011"
+        ]
+      },
+      {
+        "code": "B34.9",
+        "evidence": [
+          "ev_000012"
+        ]
+      },
+      {
+        "code": "B34.9",
+        "evidence": [
+          "ev_000013"
+        ]
+      },
+      {
+        "code": "D19",
+        "evidence": [
+          "ev_000014"
+        ]
+      },
+      {
+        "code": "В12",
+        "evidence": [
+          "ev_000015"
+        ]
+      },
+      {
+        "code": "B34.9",
+        "evidence": [
+          "ev_000016"
+        ]
+      },
+      {
+        "code": "D19",
+        "evidence": [
+          "ev_000017"
+        ]
+      },
+      {
+        "code": "В12",
+        "evidence": [
+          "ev_000018"
+        ]
+      }
+    ],
     "procedures": [],
     "anesthesia": [],
     "consents": [],
     "orders": [],
     "administrations": [],
-    "vitals_daily": [],
+    "vitals_daily": [
+      {
+        "date": "2025-09-01T06:00",
+        "temp": "36.2",
+        "pulse": "74",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000019"
+        ]
+      },
+      {
+        "date": "2025-09-01T21:00",
+        "temp": "36.6",
+        "pulse": "80",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000020"
+        ]
+      },
+      {
+        "date": "2025-09-02T06:00",
+        "temp": "36.3",
+        "pulse": "76",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000021"
+        ]
+      },
+      {
+        "date": "2025-08-21T21:00",
+        "temp": "37.2",
+        "pulse": "87",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000022"
+        ]
+      },
+      {
+        "date": "2025-08-22T06:00",
+        "temp": "36.8",
+        "pulse": "85",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000023"
+        ]
+      },
+      {
+        "date": "2025-08-22T21:00",
+        "temp": "38.2",
+        "pulse": "84",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000024"
+        ]
+      },
+      {
+        "date": "2025-08-23T06:00",
+        "temp": "37.6",
+        "pulse": "78",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000025"
+        ]
+      },
+      {
+        "date": "2025-08-23T21:00",
+        "temp": "37.4",
+        "pulse": "80",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000026"
+        ]
+      },
+      {
+        "date": "2025-08-24T06:00",
+        "temp": "36.8",
+        "pulse": "79",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000027"
+        ]
+      },
+      {
+        "date": "2025-08-24T21:00",
+        "temp": "36.7",
+        "pulse": "82",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000028"
+        ]
+      },
+      {
+        "date": "2025-08-25T06:00",
+        "temp": "36.5",
+        "pulse": "77",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000029"
+        ]
+      },
+      {
+        "date": "2025-08-25T21:00",
+        "temp": "36.7",
+        "pulse": "79",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000030"
+        ]
+      },
+      {
+        "date": "2025-08-26T06:00",
+        "temp": "36.4",
+        "pulse": "77",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000031"
+        ]
+      },
+      {
+        "date": "2025-08-26T21:00",
+        "temp": "36.6",
+        "pulse": "82",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000032"
+        ]
+      },
+      {
+        "date": "2025-08-27T06:00",
+        "temp": "36.2",
+        "pulse": "78",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000033"
+        ]
+      },
+      {
+        "date": "2025-08-27T21:00",
+        "temp": "36.4",
+        "pulse": "80",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000034"
+        ]
+      },
+      {
+        "date": "2025-08-28T06:00",
+        "temp": "36",
+        "pulse": "74",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000035"
+        ]
+      },
+      {
+        "date": "2025-08-28T21:00",
+        "temp": "36.4",
+        "pulse": "77",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000036"
+        ]
+      },
+      {
+        "date": "2025-08-29T06:00",
+        "temp": "36.3",
+        "pulse": "75",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000037"
+        ]
+      },
+      {
+        "date": "2025-08-29T21:00",
+        "temp": "36.9",
+        "pulse": "79",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000038"
+        ]
+      },
+      {
+        "date": "2025-08-30T06:00",
+        "temp": "36.7",
+        "pulse": "77",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000039"
+        ]
+      },
+      {
+        "date": "2025-08-30T21:00",
+        "temp": "36.5",
+        "pulse": "78",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000040"
+        ]
+      },
+      {
+        "date": "2025-08-31T06:00",
+        "temp": "36.4",
+        "pulse": "76",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000041"
+        ]
+      },
+      {
+        "date": "2025-08-31T21:00",
+        "temp": "36.6",
+        "pulse": "80",
+        "bp_sys": null,
+        "bp_dia": null,
+        "evidence": [
+          "ev_000042"
+        ]
+      }
+    ],
     "newborn": [],
     "vaccinations": [],
-    "infection_control": []
+    "infection_control": [
+      {
+        "mode": "isolation",
+        "note": "Бокс",
+        "evidence": [
+          "ev_000001"
+        ]
+      },
+      {
+        "mode": "isolation",
+        "note": "изоляция",
+        "evidence": [
+          "ev_000002"
+        ]
+      },
+      {
+        "mode": "isolation",
+        "note": "изоляция",
+        "evidence": [
+          "ev_000003"
+        ]
+      },
+      {
+        "mode": "isolation",
+        "note": "боксированное",
+        "evidence": [
+          "ev_000004"
+        ]
+      }
+    ]
   },
   "rule_results": [],
-  "evidence_index": []
+  "evidence_index": [
+    {
+      "evidence_id": "ev_000001",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "isolation_kw"
+      },
+      "snippet": "едств) карта №, (№ карты) ИИН Бокс № 12 № 0 Науқастың тегі, аты,",
+      "confidence": 0.9,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000002",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "isolation_kw"
+      },
+      "snippet": "более критериев производится изоляция пациента для исключения инфек",
+      "confidence": 0.9,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000003",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "isolation_kw"
+      },
+      "snippet": "более критериев производится изоляция пациента и осмотр врача. Паци",
+      "confidence": 0.9,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000004",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "isolation_kw"
+      },
+      "snippet": "отделения: Нейроинфекционное боксированное отделение 0 - 24 – нет риска,",
+      "confidence": 0.9,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000005",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "агноз клинический Может идти (B34.9 ) Вирусная инфекция неуточнен",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000006",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "цированными: отрицает. От COVID19 - получил 2 компонента вакцин",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000007",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "на порошок, на витамины В6 и В12 Объективные данные Общее сост",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000008",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "цированными: отрицает. От COVID19 - получил 2 компонента вакцин",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000009",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "на порошок, на витамины В6 и В12 Объективные данные Общее сост",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000010",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "цированными: отрицает. От COVID19 - получил 2 компонента вакцин",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000011",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "на порошок, на витамины В6 и В12 Объективные данные Общее сост",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000012",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "ждения: Обоснование диагноза (B34.9 ) Вирусная инфекция неуточнен",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000013",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "русная инфекция неуточненная (B34.9 ) Вирусная инфекция неуточнен",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000014",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "цированными: отрицает. От COVID19 - получил 2 компонента вакцин",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000015",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "на порошок, на витамины В6 и В12 Объективные данные Общее сост",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000016",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "оз (заключительный диагноз): (B34.9 ) Вирусная инфекция неуточнен",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000017",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "цированными: отрицает. От COVID19 - получил 2 компонента вакцин",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000018",
+      "doc_id": "doc_000001",
+      "loc": {
+        "rule": "dx_mkb10"
+      },
+      "snippet": "на порошок, на витамины В6 и В12 Объективные данные Общее сост",
+      "confidence": 0.85,
+      "source_model": "rules"
+    },
+    {
+      "evidence_id": "ev_000019",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 1
+      },
+      "snippet": "01.09.2025 06:00 | 110 | 70 | 74 | 36.2 | 16",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000020",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 2
+      },
+      "snippet": "01.09.2025 21:00 | 110 | 75 | 80 | 36.6 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000021",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 3
+      },
+      "snippet": "02.09.2025 06:00 | 100 | 70 | 76 | 36.3 | 17",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000022",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 4
+      },
+      "snippet": "21.08.2025 21:00 | 110 | 75 | 87 | 37.2 | 20",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000023",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 5
+      },
+      "snippet": "22.08.2025 06:00 | 100 | 70 | 85 | 36.8 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000024",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 6
+      },
+      "snippet": "22.08.2025 21:00 | 120 | 80 | 84 | 38.2 | 22",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000025",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 7
+      },
+      "snippet": "23.08.2025 06:00 | 110 | 70 | 78 | 37.6 | 20",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000026",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 8
+      },
+      "snippet": "23.08.2025 21:00 | 120 | 75 | 80 | 37.4 | 20",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000027",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 9
+      },
+      "snippet": "24.08.2025 06:00 | 115 | 70 | 79 | 36.8 | 19",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000028",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 10
+      },
+      "snippet": "24.08.2025 21:00 | 120 | 70 | 82 | 36.7 | 20",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000029",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 11
+      },
+      "snippet": "25.08.2025 06:00 | 110 | 65 | 77 | 36.5 | 19",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000030",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 12
+      },
+      "snippet": "25.08.2025 21:00 | 110 | 70 | 79 | 36.7 | 20",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000031",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 13
+      },
+      "snippet": "26.08.2025 06:00 | 110 | 65 | 77 | 36.4 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000032",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 14
+      },
+      "snippet": "26.08.2025 21:00 | 115 | 75 | 82 | 36.6 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000033",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 15
+      },
+      "snippet": "27.08.2025 06:00 | 105 | 65 | 78 | 36.2 | 16",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000034",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 16
+      },
+      "snippet": "27.08.2025 21:00 | 110 | 70 | 80 | 36.4 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000035",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 17
+      },
+      "snippet": "28.08.2025 06:00 | 100 | 60 | 74 | 36 | 17",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000036",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 18
+      },
+      "snippet": "28.08.2025 21:00 | 110 | 70 | 77 | 36.4 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000037",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 19
+      },
+      "snippet": "29.08.2025 06:00 | 105 | 65 | 75 | 36.3 | 17",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000038",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 20
+      },
+      "snippet": "29.08.2025 21:00 | 110 | 70 | 79 | 36.9 | 19",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000039",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 21
+      },
+      "snippet": "30.08.2025 06:00 | 120 | 80 | 77 | 36.7 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000040",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 22
+      },
+      "snippet": "30.08.2025 21:00 | 120 | 80 | 78 | 36.5 | 19",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000041",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 23
+      },
+      "snippet": "31.08.2025 06:00 | 115 | 75 | 76 | 36.4 | 17",
+      "confidence": 0.85,
+      "source_model": "table"
+    },
+    {
+      "evidence_id": "ev_000042",
+      "doc_id": "doc_000001",
+      "loc": {
+        "table": "vitals_sheet",
+        "row": 24
+      },
+      "snippet": "31.08.2025 21:00 | 120 | 80 | 80 | 36.6 | 18",
+      "confidence": 0.85,
+      "source_model": "table"
+    }
+  ]
 }

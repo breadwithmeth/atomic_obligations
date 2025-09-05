@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Med‑audit — статичный фронт</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .chip{padding:.125rem .5rem;border-radius:9999px;font-size:.75rem;font-weight:600;}
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+<header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+  <div class="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-blue-600 text-white font-bold">MA</span>
+      <div>
+        <div class="text-sm uppercase tracking-wide text-gray-500">Med‑audit</div>
+        <div class="text-base font-semibold">Статичный UI для API аудита мед. документов</div>
+      </div>
+    </div>
+    <div id="hdr-status" class="text-sm"></div>
+  </div>
+</header>
+
+<main class="mx-auto max-w-6xl p-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+  <!-- Controls -->
+  <section class="lg:col-span-1">
+    <div class="bg-white rounded-2xl shadow-sm border p-4 space-y-4">
+      <h2 class="text-lg font-semibold">Загрузка документа</h2>
+
+      <label class="block text-sm font-medium">API base</label>
+      <input id="apiBase" class="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring focus:border-blue-300" placeholder="http://localhost:8000" />
+
+      <label class="block text-sm font-medium">Файл (PDF/DOCX)</label>
+      <input id="file" type="file" accept=".pdf,.docx" class="w-full text-sm" />
+      <div id="fileInfo" class="text-xs text-gray-600"></div>
+
+      <div>
+        <label class="block text-sm font-medium">Модель</label>
+        <select id="model" class="w-full rounded-lg border px-3 py-2 text-sm"></select>
+        <div class="text-[11px] text-gray-500 mt-1">Список берём из /api/v1/models</div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <label class="inline-flex items-center gap-2 text-sm"><input id="xlsx" type="checkbox" checked> XLSX отчёт</label>
+        <label class="inline-flex items-center gap-2 text-sm"><input id="annotate" type="checkbox" checked> Аннотировать</label>
+      </div>
+
+      <button id="btnStart" class="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2">Запустить аудит</button>
+      <div id="err" class="text-sm text-red-600"></div>
+      <div class="text-xs text-gray-500">После загрузки пойдёт опрос статуса каждые 1.5 сек. Когда задача завершится — появятся результаты и кнопки скачивания.</div>
+    </div>
+
+    <div id="taskBox" class="hidden mt-4 bg-white rounded-2xl shadow-sm border p-4 space-y-2">
+      <h3 class="font-semibold">Задача</h3>
+      <div class="text-sm">ID: <code id="taskId" class="bg-gray-100 px-1 rounded"></code></div>
+      <div class="text-sm">Файл: <span id="taskFile">—</span></div>
+      <div class="text-sm">Статус: <span id="taskStatus"></span></div>
+      <div class="text-xs text-gray-500">Создано: <span id="taskCreated">—</span></div>
+    </div>
+
+    <div id="rulesBox" class="hidden mt-4 bg-white rounded-2xl shadow-sm border p-4 space-y-2">
+      <div class="flex items-center justify-between">
+        <h3 class="font-semibold">Правила (YAML)</h3>
+        <button id="btnRulesReload" class="text-sm px-2 py-1 border rounded-lg hover:bg-gray-50">Перезагрузить</button>
+      </div>
+      <div id="rulesInfo" class="text-sm text-gray-700">—</div>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section class="lg:col-span-2">
+    <div id="placeholder" class="bg-white rounded-2xl shadow-sm border p-6 flex items-center justify-center text-gray-500">Здесь появятся результаты проверки документа</div>
+
+    <div id="results" class="hidden space-y-4">
+      <div class="bg-white rounded-2xl shadow-sm border p-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Результаты</h2>
+          <div id="summary" class="flex items-center gap-2"></div>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <button id="btnDLjson" class="px-3 py-1.5 rounded-lg border hover:bg-gray-50 text-sm">Скачать JSON</button>
+          <button id="btnDLxlsx" class="px-3 py-1.5 rounded-lg border hover:bg-gray-50 text-sm">Скачать XLSX</button>
+          <button id="btnDLannot" class="px-3 py-1.5 rounded-lg border hover:bg-gray-50 text-sm">Скачать аннотированный</button>
+          <button id="btnAnnotNow" class="px-3 py-1.5 rounded-lg border hover:bg-gray-50 text-sm">Аннотировать сейчас</button>
+        </div>
+      </div>
+
+      <div id="sections"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="mx-auto max-w-6xl px-4 py-8 text-xs text-gray-500">
+  <div>Подсказка: если фронт и API на разных портах/доменных — включите CORS в FastAPI.</div>
+  <pre class="bg-gray-100 p-2 rounded mt-2 overflow-auto">from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])</pre>
+</footer>
+
+<script>
+(function(){
+  const el = (id)=>document.getElementById(id);
+  const $ = (sel)=>document.querySelector(sel);
+
+  // State
+  let apiBase = localStorage.getItem('MED_AUDIT_API') || 'http://localhost:8000';
+  let auditId = null;
+  let pollTimer = null;
+
+  // Elements
+  const apiBaseI = el('apiBase');
+  const fileI = el('file');
+  const fileInfo = el('fileInfo');
+  const modelI = el('model');
+  const xlsxI = el('xlsx');
+  const annotateI = el('annotate');
+  const btnStart = el('btnStart');
+  const errBox = el('err');
+
+  const taskBox = el('taskBox');
+  const taskId = el('taskId');
+  const taskFile = el('taskFile');
+  const taskStatus = el('taskStatus');
+  const taskCreated = el('taskCreated');
+
+  const rulesBox = el('rulesBox');
+  const rulesInfo = el('rulesInfo');
+  const btnRulesReload = el('btnRulesReload');
+
+  const placeholder = el('placeholder');
+  const results = el('results');
+  const summary = el('summary');
+  const sections = el('sections');
+  const btnDLjson = el('btnDLjson');
+  const btnDLxlsx = el('btnDLxlsx');
+  const btnDLannot = el('btnDLannot');
+  const btnAnnotNow = el('btnAnnotNow');
+
+  const hdrStatus = el('hdr-status');
+
+  function chip(txt, cls){ return `<span class="chip ${cls}">${txt}</span>`; }
+  function sevChip(sev){
+    if(sev==='critical') return chip('critical','bg-red-100 text-red-800');
+    if(sev==='major') return chip('major','bg-orange-100 text-orange-800');
+    return chip('minor','bg-gray-100 text-gray-800');
+  }
+  function statusChip(s){
+    const map={QUEUED:['В очереди','bg-gray-100 text-gray-800'],RUNNING:['В работе','bg-blue-100 text-blue-800'],SUCCEEDED:['Готово','bg-green-100 text-green-800'],FAILED:['Ошибка','bg-red-100 text-red-800']};
+    const [t,c]=map[s]||map.QUEUED;return chip(t,c);
+  }
+
+  function setApiBase(v){ apiBase = v; apiBaseI.value = v; localStorage.setItem('MED_AUDIT_API', v); }
+
+  async function apiGet(path){
+    const r = await fetch(apiBase+path);
+    if(!r.ok) throw new Error(r.status+" "+r.statusText);
+    return r.json();
+  }
+  async function apiPostForm(path, fd){
+    const r = await fetch(apiBase+path, {method:'POST', body:fd});
+    if(!r.ok) throw new Error(r.status+" "+r.statusText);
+    return r.json();
+  }
+  function dl(url){ window.open(url,'_blank'); }
+
+  async function loadModels(){
+    try{
+      const d = await apiGet('/api/v1/models');
+      const list = (d?.models || d?.data || []).map(x=>x.name||x.model||x);
+      modelI.innerHTML = '';
+      for(const m of list){ const o=document.createElement('option'); o.value=m; o.textContent=m; modelI.appendChild(o); }
+      if(!list.length){ const o=document.createElement('option'); o.value='llama3.1:8b'; o.textContent='llama3.1:8b'; modelI.appendChild(o); }
+    }catch(e){ modelI.innerHTML = '<option>llama3.1:8b</option>'; }
+  }
+
+  async function tryRules(){
+    try{
+      const d = await apiGet('/api/v1/rules');
+      rulesBox.classList.remove('hidden');
+      rulesInfo.textContent = `файлы: ${d.files?.join(', ')||'—'} | checks: ${d.checks} | digest: ${d.digest?.slice(0,12)||'—'}`;
+    }catch(e){ /* endpoint может отсутствовать — молчим */ }
+  }
+
+  async function startAudit(){
+    errBox.textContent='';
+    const f = fileI.files?.[0];
+    if(!f){ errBox.textContent='Выберите файл PDF/DOCX'; return; }
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('model', modelI.value);
+    fd.append('xlsx', String(xlsxI.checked));
+    fd.append('annotate', String(annotateI.checked));
+    try{
+      const resp = await apiPostForm('/api/v1/audits', fd);
+      auditId = resp.id; renderTaskBox({id:auditId,status:resp.status,model:resp.model});
+      pollStart();
+    }catch(e){ errBox.textContent = 'Не удалось отправить: '+e.message; }
+  }
+
+  function renderTaskBox(a){
+    taskBox.classList.remove('hidden');
+    taskId.textContent = a.id || '—';
+    taskFile.textContent = a.input_name || fileI.files?.[0]?.name || '—';
+    taskStatus.innerHTML = statusChip(a.status);
+    if(a.created_at){ taskCreated.textContent = new Date(a.created_at).toLocaleString(); }
+    hdrStatus.innerHTML = a.status ? statusChip(a.status) : '';
+  }
+
+  async function pollOnce(){
+    if(!auditId) return;
+    try{
+      const a = await apiGet(`/api/v1/audits/${auditId}`);
+      renderTaskBox(a);
+      if(a.status==='SUCCEEDED'){
+        clearInterval(pollTimer); pollTimer=null;
+        const iss = await apiGet(`/api/v1/audits/${auditId}/issues`);
+        renderResults(iss);
+      } else if(a.status==='FAILED') {
+        clearInterval(pollTimer); pollTimer=null;
+        errBox.textContent = 'Задача завершилась с ошибкой. См. логи API.';
+      }
+    }catch(e){ /* ignore transient */ }
+  }
+  function pollStart(){ placeholder.classList.remove('hidden'); results.classList.add('hidden'); pollOnce(); pollTimer = setInterval(pollOnce, 1500); }
+
+  function renderResults(iss){
+    placeholder.classList.add('hidden'); results.classList.remove('hidden');
+    const arr = iss.issues_flat || [];
+    // summary
+    const sums = {critical:0,major:0,minor:0,total:0};
+    for(const it of arr){ sums[it.severity]=(sums[it.severity]||0)+1; sums.total++; }
+    summary.innerHTML = [
+      `<span class="chip bg-red-100 text-red-800">critical: ${sums.critical}</span>`,
+      `<span class="chip bg-orange-100 text-orange-800">major: ${sums.major}</span>`,
+      `<span class="chip bg-gray-100 text-gray-800">minor: ${sums.minor}</span>`,
+      `<span class="chip bg-blue-100 text-blue-800">total: ${sums.total}</span>`
+    ].join(' ');
+
+    // downloads
+    const baseDL = `${apiBase}/api/v1/audits/${auditId}/download`;
+    btnDLjson.onclick = ()=> dl(`${baseDL}?kind=json`);
+    btnDLxlsx.onclick = ()=> dl(`${baseDL}?kind=xlsx`);
+    btnDLannot.onclick = ()=> dl(`${baseDL}?kind=annotated`);
+    btnAnnotNow.onclick = annotateNow;
+
+    // group by section
+    const bySection = {};
+    for(const it of arr){ const s=it.section||'—'; (bySection[s]||(bySection[s]=[])).push(it); }
+    sections.innerHTML = '';
+    for(const [sec,items] of Object.entries(bySection)){
+      const box = document.createElement('div');
+      box.className = 'bg-white rounded-2xl shadow-sm border overflow-hidden mb-4';
+      box.innerHTML = `
+        <div class="px-4 py-3 border-b flex items-center justify-between">
+          <div class="font-semibold">${sec}</div>
+          <div class="text-sm text-gray-500">${items.length} проблем(ы)</div>
+        </div>
+        <ul class="divide-y"></ul>`;
+      const ul = box.querySelector('ul');
+      for(const it of items){
+        const li = document.createElement('li');
+        li.className = 'p-4 flex flex-col gap-1';
+        li.innerHTML = `
+          <div class="flex items-center gap-2">
+            ${sevChip(it.severity)}
+            <div class="font-medium">${escapeHtml(it.title||'')}</div>
+          </div>
+          ${it.evidence?`<div class="text-sm text-gray-700"><span class="text-gray-400">Доказательство:</span> ${escapeHtml(it.evidence)}</div>`:''}
+          ${it.fix?`<div class="text-sm"><span class="text-gray-400">Как исправить:</span> ${escapeHtml(it.fix)}</div>`:''}
+        `;
+        ul.appendChild(li);
+      }
+      sections.appendChild(box);
+    }
+  }
+
+  async function annotateNow(){
+    if(!auditId) return;
+    try{ await apiPostForm(`/api/v1/audits/${auditId}/annotate`, new FormData()); }
+    catch(e){ errBox.textContent = 'Аннотация не выполнена: '+e.message; }
+  }
+
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+  // Wire up
+  apiBaseI.addEventListener('change', ()=> setApiBase(apiBaseI.value.trim()));
+  fileI.addEventListener('change', ()=>{
+    const f = fileI.files?.[0];
+    fileInfo.textContent = f ? `${f.name} • ${(f.size/1024/1024).toFixed(2)} MB` : '';
+  });
+  btnStart.addEventListener('click', startAudit);
+  btnRulesReload.addEventListener('click', async ()=>{ try{ await apiPostForm('/api/v1/rules/reload', new FormData()); await tryRules(); }catch(e){} });
+
+  // Init
+  setApiBase(apiBase);
+  loadModels();
+  tryRules();
+})();
+</script>
+</body>
+</html>

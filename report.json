@@ -1,0 +1,489 @@
+{
+  "source_file": "infection.docx",
+  "normalized_fields": {
+    "discharge_dt": "Не указано",
+    "department": "Нейроинфекционное боксированное отделение Палата: Бокс № 15",
+    "diagnosis": "Диагноз направившей организации"
+  },
+  "errors": [
+    {
+      "code": "missing_field",
+      "field": "iin",
+      "msg": "Отсутствует обязательное поле: iin"
+    },
+    {
+      "code": "missing_field",
+      "field": "full_name",
+      "msg": "Отсутствует обязательное поле: full_name"
+    },
+    {
+      "code": "missing_field",
+      "field": "dob",
+      "msg": "Отсутствует обязательное поле: dob"
+    },
+    {
+      "code": "missing_field",
+      "field": "sex",
+      "msg": "Отсутствует обязательное поле: sex"
+    },
+    {
+      "code": "missing_field",
+      "field": "admit_dt",
+      "msg": "Отсутствует обязательное поле: admit_dt"
+    },
+    {
+      "code": "missing_field",
+      "field": "physician",
+      "msg": "Отсутствует обязательное поле: physician"
+    },
+    {
+      "code": "missing_field",
+      "field": "diagnosis",
+      "msg": "Отсутствует обязательное поле: diagnosis"
+    },
+    {
+      "code": "invalid_date",
+      "field": "discharge_dt",
+      "msg": "Неверный формат даты выписки"
+    },
+    {
+      "code": "act:V2000021579",
+      "msg": "В шапке формы отсутствует ИИН пациента (обязательное поле).",
+      "act": "V2000021579",
+      "act_title": "Приказ и.о. Министра здравоохранения РК от 30.10.2020 № ҚР ДСМ-175/2020"
+    },
+    {
+      "code": "act:V2000021579",
+      "msg": "Отсутствует ФИО пациента (обязательное поле).",
+      "act": "V2000021579",
+      "act_title": "Приказ и.о. Министра здравоохранения РК от 30.10.2020 № ҚР ДСМ-175/2020"
+    },
+    {
+      "code": "act:V2000021579",
+      "msg": "Отсутствует дата рождения (обязательное поле).",
+      "act": "V2000021579",
+      "act_title": "Приказ и.о. Министра здравоохранения РК от 30.10.2020 № ҚР ДСМ-175/2020"
+    },
+    {
+      "code": "act:V2000021579",
+      "msg": "Отсутствует пол (обязательное поле).",
+      "act": "V2000021579",
+      "act_title": "Приказ и.о. Министра здравоохранения РК от 30.10.2020 № ҚР ДСМ-175/2020"
+    },
+    {
+      "code": "act:V2200027218",
+      "msg": "В стационарной карте должен быть указан факт госпитализации (дата поступления).",
+      "act": "V2200027218",
+      "act_title": "Приказ МЗ РК от 24.03.2022 № ҚР-ДСМ-27 (Стандарт стационарной помощи)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "Отсутствуют ежедневные записи лечащего врача за некоторые дни госпитализации (нет даты поступления)",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "При летальном исходе нет посмертного эпикриза/свидетельства о смерти (106/у)",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    }
+  ],
+  "warnings": [
+    {
+      "code": "diagnosis_found_in_text",
+      "field": "diagnosis",
+      "msg": "Диагноз найден в тексте, но отсутствует в key_values",
+      "value": "Диагноз направившей организации"
+    },
+    {
+      "code": "act:V2200027218",
+      "msg": "Дата выписки не может предшествовать дате поступления. (невозможно проверить — нет дат)",
+      "act": "V2200027218",
+      "act_title": "Приказ МЗ РК от 24.03.2022 № ҚР-ДСМ-27 (Стандарт стационарной помощи)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "Не зафиксированы витальные показатели в некоторые дни (T/АД/Пульс/ЧДД/SpO2) (нет даты поступления)",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "Не соблюдён регламент осмотров заведующим (ежедневно для тяжёлых, ≥1/нед для средней тяжести) (нет даты поступления)",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "Есть признаки длительной нетрудоспособности/инвалидизации — нет сведений о направлении на МСЭ",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "Нет явной отметки о передаче информации на амбулаторный этап (ЕИСЗ/поликлиника)",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    },
+    {
+      "code": "act:CHECKLIST_INPATIENT_2025",
+      "msg": "Возраст не удалось определить (нет корректной даты рождения)",
+      "act": "CHECKLIST_INPATIENT_2025",
+      "act_title": "Чек-лист стационарной документации (РК)"
+    },
+    {
+      "code": "llm_format",
+      "msg": "LLM вернул текст; применена авто-коэрсия в JSON."
+    }
+  ],
+  "llm": {
+    "used": true,
+    "raw": {
+      "raw": "This is a large block of text in Kazakh and Russian languages, which appears to be a medical record or a hospital discharge summary. I'll try to extract some relevant information from it.\n\n**Patient Information**\n\n* Name: Not specified\n* Date of birth: Not specified\n* Age: Not specified\n* Nationality: Kazakh\n* Citizenship: Kazakhstan\n\n**Admission Information**\n\n* Type of admission: Emergency (within 7-24 hours)\n* Reason for admission: Viral infection (not specified) with complications (paratonsillitis)\n\n**Diagnosis**\n\n* Primary diagnosis: Lacunar angina caused by Staphylococcus aureus (10^6 CFU/mL)\n* Secondary diagnosis: Right-sided paratonsillitis\n\n**Treatment and Medications**\n\n* Treatment: Antibiotics, antipyretics, and supportive care\n* Medications: Not specified in the text\n\n**Discharge Information**\n\n* Date of discharge: 24.08.2025\n* Time of discharge: 14:56\n* Reason for discharge: Improvement\n* Follow-up instructions: Continue antibiotics, rest, and hydration\n\nPlease note that this is a machine translation, and some details may be lost in translation. If you need more information or clarification, please let me know!"
+    },
+    "coerced": {
+      "errors": [],
+      "warnings": [
+        {
+          "code": "llm_format",
+          "msg": "LLM вернул текст; применена авто-коэрсия в JSON."
+        }
+      ],
+      "suggestions": [],
+      "extracted_fields": {
+        "patient": {
+          "name": "Not specified",
+          "dob": null,
+          "sex": null,
+          "iin": null
+        },
+        "admission": {
+          "type": "Emergency (within 7-24 hours)",
+          "admit_dt": null
+        },
+        "discharge": {
+          "dt": "24.08.2025",
+          "time": "14:56",
+          "reason": "Improvement"
+        },
+        "diagnosis": {
+          "primary": "Lacunar angina caused by Staphylococcus aureus (10^6 CFU/mL)",
+          "secondary": "Right-sided paratonsillitis"
+        }
+      }
+    },
+    "attempts": 1
+  },
+  "llm_sections": {
+    "used": true,
+    "sections": [
+      {
+        "section_id": "forms_passport",
+        "title": "Паспортная часть и формы",
+        "raw": {
+          "section_id": "",
+          "section_title": "",
+          "errors": [
+            {
+              "code": "IIN",
+              "msg": "ИИН отсутствует",
+              "field": "passport"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "initial_exam_anamnesis",
+        "title": "Первичный осмотр и анамнез",
+        "raw": {
+          "section_id": "initial_exam_anamnesis",
+          "section_title": "Первичный осмотр и анамнез",
+          "errors": [
+            {
+              "code": "missing_field",
+              "msg": "Не указано время поступления",
+              "field": "admit_dt"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "daily_notes",
+        "title": "Ежедневные записи лечащего врача",
+        "raw": {
+          "section_id": "daily_notes",
+          "section_title": "Ежедневные записи лечащего врача",
+          "errors": [
+            {
+              "code": "missing_record",
+              "msg": "Нет записи для 2023-02-20"
+            },
+            {
+              "code": "incomplete_record",
+              "msg": "Запись для 2023-02-22 неполная"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "duty_notes",
+        "title": "Записи дежурных врачей",
+        "raw": {
+          "section_id": "duty_notes",
+          "section_title": "Записи дежурных врачей",
+          "errors": [
+            {
+              "code": "",
+              "msg": "Не указано время поступления пациента.",
+              "field": "admit_dt"
+            },
+            {
+              "code": "",
+              "msg": "Дата выписки не указана.",
+              "field": "discharge_dt"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "head_rounds",
+        "title": "Осмотры заведующего отделением",
+        "raw": {
+          "section_id": "head_rounds",
+          "section_title": "Осмотры заведующего отделением",
+          "errors": [
+            {
+              "code": "missing_date",
+              "msg": "Для средней тяжести больных осмотр заведующим отсутствует.",
+              "field": "осмотр_заведующим"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "prescription_sheet",
+        "title": "Лист врачебных назначений",
+        "raw": {
+          "section_id": "",
+          "section_title": "",
+          "errors": [
+            {
+              "code": "missing_dosage",
+              "msg": "Отсутствует доза",
+              "field": "Клавунат"
+            },
+            {
+              "code": "missing_frequency",
+              "msg": "Отсутствует частота",
+              "field": "Повидон-Йод"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "investigations",
+        "title": "Результаты исследований",
+        "raw": {
+          "section_id": "investigations",
+          "title": "Результаты исследований",
+          "errors": [
+            {
+              "code": "missing_result",
+              "msg": "Отсутствуют результаты исследования \"Рентгенография пазух носа\"",
+              "field": "рентгенография_пазух_носа"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {
+            "рентгенография_пазух_носа": "Носовая перегородка по средней линии Костно-деструктивных изменений не выявлено.",
+            "рентгенография_обзорная_органов_грудной_клетки": "На обзорной рентгенограмме органов грудной клетки, произведенной в прямой проекции от 21.08.25г по всем легочным полям без очаговых и инфильтративных теней. Легочный рисунок не изменен. Корни структурные. Синусы свободные Диафрагма с четким, ровным контуром на уровне 6 ребра. Тень сердца не расширена. Аорта не изменена"
+          }
+        }
+      },
+      {
+        "section_id": "consults_procedures",
+        "title": "Консультации и инвазивные процедуры",
+        "raw": {
+          "section_id": "consults_procedures",
+          "section_title": "Консултаций и инвазивные прогредуры",
+          "errors": [
+            {
+              "code": "MISSING_SIGNATURE",
+              "msg": "",
+              "field": "consultation_1"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "icu_transfer",
+        "title": "Перевод в ОРИТ/интенсивную терапию",
+        "raw": {
+          "section_id": "icu_transfer",
+          "title": "Перевод в ОРИТ/интенсивную терапию",
+          "errors": [],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {
+            "discharge_dt": "Не указано"
+          }
+        }
+      },
+      {
+        "section_id": "mse_docs",
+        "title": "Документы на МСЭ",
+        "raw": {
+          "section_id": "mse_docs",
+          "section_title": "Документы на МСЭ",
+          "errors": [
+            {
+              "code": "missing_discharge_dt",
+              "msg": "Дата выписки не указана",
+              "field": "discharge_dt"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "signatures_completeness",
+        "title": "Полнота и правильность записей/подписи",
+        "raw": {
+          "section_id": "signatures_completeness",
+          "section_title": "Полнота и правильность записей/подписи",
+          "errors": [
+            {
+              "code": "MISSING_DATE",
+              "msg": "Дата не указана для записи",
+              "field": "discharge_dt"
+            },
+            {
+              "code": "MISSING_SIGNATURE",
+              "msg": "Подпись отсутствует для врача",
+              "field": "doctor_signature"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "discharge_epicrisis",
+        "title": "Выписной эпикриз и рекомендации",
+        "raw": {
+          "section_id": "discharge_epicrisis",
+          "section_title": "Выписной эпикриз и рекомендации",
+          "errors": [
+            {
+              "code": "missing_field",
+              "msg": "Не указано: discharge_dt"
+            },
+            {
+              "code": "invalid_value",
+              "msg": "Нет окончательного диагноза (МКБ-10 при необходимости)",
+              "field": "diagnosis"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "sick_leave",
+        "title": "Листок нетрудоспособности",
+        "raw": {
+          "section_id": "",
+          "section_title": "",
+          "errors": [
+            {
+              "code": "missing_field",
+              "msg": "Поле \"Номер\" не заполнено",
+              "field": "number"
+            },
+            {
+              "code": "invalid_date",
+              "msg": "Дата \"Срок\" неверна",
+              "field": "date"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "refusal_self_discharge",
+        "title": "Отказ от лечения/самовольная выписка",
+        "raw": {
+          "section_id": "refusal_self_discharge",
+          "section_title": "Отказ от лечения/самовольная выписка",
+          "errors": [
+            {
+              "code": "",
+              "msg": "Не указано дата выписки",
+              "field": "discharge_dt"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      },
+      {
+        "section_id": "death_case",
+        "title": "Летальный исход",
+        "raw": {
+          "section_id": "death_case",
+          "section_title": "Летальный исход",
+          "errors": [
+            {
+              "code": "",
+              "msg": "Не указана дата/время смерти",
+              "field": "discharge_dt"
+            },
+            {
+              "code": "",
+              "msg": "Нет медицинского свидетельства о смерти (106/у)",
+              "field": "department"
+            }
+          ],
+          "warnings": [],
+          "suggestions": [],
+          "extracted_facts": {}
+        }
+      }
+    ],
+    "errors": null
+  },
+  "llm_md_summary": {
+    "used": true,
+    "summary_file": "report_summary.md"
+  }
+}

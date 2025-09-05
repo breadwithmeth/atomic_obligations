@@ -1,54 +1,274 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-med_parse_llm.py — конвертер медицинских документов (.docx) в единый JSON-кейс
-с использованием ТОЛЬКО локальной нейросети (LLM) для извлечения фактов.
+med_parse_rules.py — быстрый профильный парсер медицинских .docx в единый JSON-кейс
+БЕЗ LLM. Для каждого вида документа используется YAML-профиль (therapy/surgery/infectious).
 
-• Платформы: macOS, Linux
-• Зависимости: python-docx, requests  (pip install python-docx requests)
-• LLM: локальный сервер (например, Ollama) на http://localhost:11434
-        модель по умолчанию — deepseek-v3 (параметризуется флагом)
+Зависимости:
+  pip install python-docx pyyaml
 
-Запуск (пример):
-  python med_parse_llm.py \
+Быстрый старт:
+  # 1) сгенерировать дефолтные YAML (configs/v1/*.yaml)
+  python med_parse_rules.py --init-config
+
+  # 2) прогнать документы
+  python med_parse_rules.py \
     --case-id KZ-DEMO-1 \
     --out case.json \
-    --model deepseek-v3 \
-    /mnt/data/инфеция.docx /mnt/data/кесарево род дом.docx
+    /path/терапевтическая.docx /path/хирургия.docx /path/инфеция.docx
 
-Скрипт НЕ использует регулярки/правила для извлечения медицинских фактов.
-Вся семантика берётся из вывода LLM (zero/few-shot). Мы лишь выравниваем
-вывод модели в стандартный JSON и сохраняем цитаты как evidence.
+Профили:
+  configs/v1/common.yaml
+  configs/v1/therapy.yaml
+  configs/v1/surgery.yaml
+  configs/v1/infectious.yaml
+
+Что парсится в v1:
+  • Therapy: МКБ-10, температурный лист (vitals_daily), назначения (orders/administrations)
+  • Surgery: процедуры (operation dt, site), ASA (anesthesia), согласие на операцию/анестезию, назначения
+  • Infectious: режим изоляции/эпидрежим, МКБ-10, базовые vitals/orders
+
+Схема выходного JSON совместима с ранними скриптами (facts + evidence_index).
 """
 from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import hashlib
-from typing import Any, Dict, List, Optional
-from docx import Document 
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
 try:
-    import requests  # локальный HTTP к LLM
-except Exception as e:
-    print("[!] Требуется пакет requests. Установите: pip install requests", file=sys.stderr)
+    import yaml
+except Exception:
+    print("[!] Требуется PyYAML: pip install pyyaml", file=sys.stderr)
     raise
 
+try:
+    from docx import Document
+except Exception:
+    print("[!] Требуется python-docx: pip install python-docx", file=sys.stderr)
+    raise
 
-# ----------------------------- CLI -----------------------------
+# ============================= Встроенные дефолтные YAML =============================
 
-def parse_args():
-    ap = argparse.ArgumentParser(description="DOCX → JSON через локальную нейросеть")
-    ap.add_argument("inputs", nargs="+", help="Пути к .docx (один кейс — несколько файлов)")
-    ap.add_argument("--case-id", required=True, help="Идентификатор кейса")
-    ap.add_argument("--out", required=True, help="Путь к выходному JSON")
-    ap.add_argument("--locale", default="ru-KZ", help="Локаль кейса (ru-KZ/kk-KZ)")
-    ap.add_argument("--llm-url", default="http://localhost:11434", help="База URL локальной LLM (например, Ollama)")
-    ap.add_argument("--model", default="deepseek-v3", help="Имя локальной модели (например: deepseek-v3, deepseek-r1)")
-    ap.add_argument("--threshold", type=float, default=0.80, help="Порог confidence фактов от LLM (0..1)")
-    return ap.parse_args()
+DEFAULT_COMMON = r"""
+meta:
+  profile_version: v1
+normalize:
+  date_formats: ["DD.MM.YYYY HH:mm", "DD.MM.YYYY", "YYYY-MM-DD", "YYYY-MM-DDTHH:mm"]
+  decimals: [",", "."]
+  routes:
+    iv: ["в/в","внутривенно","iv"]
+    im: ["в/м","внутримыш","im"]
+    sc: ["п/к","подкожно","sc"]
+    po: ["per os","п/о","peroral","po"]
+  synonyms:
+    roles:
+      date:   ["дата","date","время"]
+      time:   ["время","time"]
+      temp:   ["t","t°","темпера","температура"]
+      pulse:  ["пульс","чсс","жсс"]
+      bp:     ["ад","давлен","артериальн","ққ"]
+      drug:   ["препарат","наимен","лекарств","drug"]
+      dose:   ["доза","дозировка","dose"]
+      route:  ["путь","маршрут","route"]
+      freq:   ["кратн","частота","freq"]
+      exec:   ["исполн","подпись","м/с","медсестра","nurse"]
+constraints:
+  mkb10: "^[A-ZА-Я][0-9]{2}(?:\.[0-9A-ZА-Я]{1,2})?$"
+  asa:   "^(I|II|III|IV|V)$"
+  infection_modes: ["isolation","cohort","ppe","sanitation"]
 
-# ----------------------------- Вспомогательные -----------------------------
+merge:
+  vitals_daily:
+    key: ["date"]
+  orders:
+    key: ["drug","period_start"]
+
+"""
+
+DEFAULT_THERAPY = r"""
+meta:
+  id: therapy
+  title: Терапия / дневной стационар
+  profile_version: v1
+  doc_type: therapy
+
+detect:
+  min_score: 2
+  filename_hints: ["терап", "terap"]
+  keywords: ["терапевт", "дневн", "температур", "назначени"]
+  table_headers:
+    - ["дата","t","пульс","ад"]
+    - ["препарат","доза","путь","кратн"]
+
+text_rules:
+  - id: dx_mkb10
+    description: Диагнозы МКБ-10 из текста
+    regex: "(?<!АД\s)([A-ZА-Я][0-9]{2}(?:\.[0-9A-ZА-Я]{1,2})?)"
+    emit: facts.diagnoses
+    fields:
+      code: "$1"
+    confidence: 0.9
+
+  - id: isolation_kw
+    description: Ключевые слова изоляции
+    regex: "(?i)(изоляц\w*|эпидреж\w*|бокс\w*|кохорт\w*)"
+    emit: facts.infection_control
+    fields:
+      mode: "isolation"
+      note: "$1"
+    confidence: 0.8
+
+# Описание таблиц и правил строк
+.tables:
+  vitals_sheet:
+    header_roles: ["date","temp","pulse","bp"]
+    row_rules:
+      - require: ["date"]
+        emit: facts.vitals_daily
+        fields:
+          - op: parse_date; from: date; to: date
+          - op: copy; from: temp; to: temp
+          - op: copy; from: pulse; to: pulse
+          - op: parse_bp; from: bp; to: [bp_sys,bp_dia]
+        confidence: 0.85
+
+  orders_sheet:
+    header_roles: ["drug","dose","route","freq","date","exec"]
+    row_rules:
+      - require: ["drug"]
+        emit: facts.orders
+        fields:
+          - op: copy; from: drug; to: drug
+          - op: copy; from: dose; to: dose
+          - op: map_route; from: route; to: route
+          - op: copy; from: freq; to: freq
+          - op: parse_date; from: date; to: period_start
+          - op: join_period; from: [period_start,period_end]; to: period
+        set:
+          kind: medication
+        confidence: 0.85
+      - require: ["drug","exec"]
+        emit: facts.administrations
+        fields:
+          - op: copy; from: drug; to: drug
+          - op: parse_date; from: date; to: dt
+          - op: copy; from: exec; to: nurse
+        confidence: 0.8
+"""
+
+DEFAULT_SURGERY = r"""
+meta:
+  id: surgery
+  title: Хирургия / операционный блок
+  profile_version: v1
+  doc_type: surgery
+
+detect:
+  min_score: 2
+  filename_hints: ["хирург", "surgery", "операц"]
+  keywords: ["операц", "вмешател", "ана\s*стез", "ASA", "послеоперац"]
+  table_headers:
+    - ["препарат","доза","путь","кратн"]
+
+text_rules:
+  - id: procedure_dt
+    description: Дата/время операции
+    regex: "(?i)(операц\w*|вмешател\w*).{0,40}?((?:\d{2}[.]){2}\d{4}(?:\s+\d{2}:\d{2})?)"
+    emit: facts.procedures
+    fields:
+      type: "surgery"
+      dt: "$2"
+    post:
+      - op: normalize_date; field: dt
+    confidence: 0.9
+
+  - id: asa
+    description: ASA класс
+    regex: "\bASA\s*(I|II|III|IV|V)\b"
+    emit: facts.anesthesia
+    fields:
+      asa: "$1"
+    confidence: 0.9
+
+  - id: consent
+    description: Согласие на операцию/анестезию
+    regex: "(?i)согласие\s+на\s+(операц\w*|анестез\w*).{0,40}?подпис"
+    emit: facts.consents
+    fields:
+      kind: "$1"
+    post:
+      - op: map_kind; field: kind; mapping: {"операц":"surgery","анестез":"anesthesia"}
+    confidence: 0.8
+
+.tables:
+  orders_sheet:
+    header_roles: ["drug","dose","route","freq","date","exec"]
+    row_rules:
+      - require: ["drug"]
+        emit: facts.orders
+        fields:
+          - op: copy; from: drug; to: drug
+          - op: copy; from: dose; to: dose
+          - op: map_route; from: route; to: route
+          - op: copy; from: freq; to: freq
+          - op: parse_date; from: date; to: period_start
+          - op: join_period; from: [period_start,period_end]; to: period
+        set: { kind: medication }
+        confidence: 0.85
+"""
+
+DEFAULT_INFECTIOUS = r"""
+meta:
+  id: infectious
+  title: Инфекционные отделения / противоэпидрежим
+  profile_version: v1
+  doc_type: infectious
+
+detect:
+  min_score: 2
+  filename_hints: ["инфек", "infection"]
+  keywords: ["изоляц", "бокс", "эпидреж", "кохорт", "контактн"]
+  table_headers:
+    - ["дата","t","пульс","ад"]
+
+text_rules:
+  - id: isolation_kw
+    description: Изоляция, бокс, эпидрежим
+    regex: "(?i)(изоляц\w*|бокс\w*|эпидреж\w*|кохорт\w*)"
+    emit: facts.infection_control
+    fields:
+      mode: "isolation"
+      note: "$1"
+    confidence: 0.9
+
+  - id: dx_mkb10
+    description: Диагнозы МКБ-10
+    regex: "(?<!АД\s)([A-ZА-Я][0-9]{2}(?:\.[0-9A-ZА-Я]{1,2})?)"
+    emit: facts.diagnoses
+    fields:
+      code: "$1"
+    confidence: 0.85
+
+.tables:
+  vitals_sheet:
+    header_roles: ["date","temp","pulse","bp"]
+    row_rules:
+      - require: ["date"]
+        emit: facts.vitals_daily
+        fields:
+          - op: parse_date; from: date; to: date
+          - op: copy; from: temp; to: temp
+          - op: copy; from: pulse; to: pulse
+          - op: parse_bp; from: bp; to: [bp_sys,bp_dia]
+        confidence: 0.85
+"""
+
+# ============================= Утилиты =============================
 
 def file_sha256(path: str) -> str:
     h = hashlib.sha256()
@@ -57,110 +277,264 @@ def file_sha256(path: str) -> str:
             h.update(chunk)
     return "sha256:" + h.hexdigest()
 
-# Вытащим из .docx текст и простое представление таблиц (как текст)
+@dataclass
+class Evidence:
+    items: List[Dict[str, Any]] = field(default_factory=list)
 
-def read_docx_as_text(path: str) -> Dict[str, Any]:
+    def add(self, doc_id: str, snippet: str, loc: Dict[str, Any], conf: float, src: str) -> str:
+        evid = f"ev_{len(self.items)+1:06d}"
+        self.items.append({
+            "evidence_id": evid,
+            "doc_id": doc_id,
+            "loc": loc or {},
+            "snippet": (" ".join(snippet.split()))[:500],
+            "confidence": round(conf, 3),
+            "source_model": src,
+        })
+        return evid
+
+# ============================= Чтение DOCX =============================
+
+def read_docx_as_blocks(path: str) -> Dict[str, Any]:
     doc = Document(path)
-    paragraphs: List[str] = []
+    paras: List[str] = []
     for p in doc.paragraphs:
         t = p.text.strip()
         if t:
-            paragraphs.append(t)
-
-    tables_txt: List[str] = []
+            paras.append(t)
+    tables: List[List[List[str]]] = []
     for tb in doc.tables:
-        rows_txt: List[str] = []
+        rows: List[List[str]] = []
         for r in tb.rows:
-            cells = [" ".join(c.text.split()) for c in r.cells]
-            rows_txt.append(" | ".join(cells))
-        tables_txt.append("\n".join(rows_txt))
+            rows.append([" ".join(c.text.split()) for c in r.cells])
+        tables.append(rows)
+    return {"paras": paras, "tables": tables}
 
-    full_text = "\n".join(paragraphs)
-    if tables_txt:
-        full_text += "\n\n[TABLES]\n" + "\n\n---\n\n".join(tables_txt)
+# ============================= Загрузка YAML профилей =============================
 
-    return {
-        "text": full_text,
-        "tables_count": len(doc.tables)
+def ensure_default_configs(base: str):
+    os.makedirs(base, exist_ok=True)
+    files = {
+        os.path.join(base, "common.yaml"): DEFAULT_COMMON,
+        os.path.join(base, "therapy.yaml"): DEFAULT_THERAPY,
+        os.path.join(base, "surgery.yaml"): DEFAULT_SURGERY,
+        os.path.join(base, "infectious.yaml"): DEFAULT_INFECTIOUS,
     }
+    for p, content in files.items():
+        if not os.path.exists(p):
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"[init] wrote {p}")
 
-# ----------------------------- Промпт для LLM -----------------------------
+@dataclass
+class Profile:
+    id: str
+    data: Dict[str, Any]
 
-def build_prompt(doc_text: str) -> str:
-    """Инструкция для локальной модели: вернуть ТОЛЬКО JSON по заданной схеме."""
-    schema = r"""
-{
-  "diagnoses": [
-    {"code": "A09", "label": "string|null", "date": "YYYY-MM-DD|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "consents": [
-    {"kind": "surgery|anesthesia|procedure", "signed_dt": "YYYY-MM-DD|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "anesthesia": [
-    {"asa": "I|II|III|IV|V|null", "dt": "YYYY-MM-DD|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "procedures": [
-    {"type": "surgery|delivery_cs|delivery_vaginal|biopsy|puncture|endoscopy", "code": "string|null", "dt": "YYYY-MM-DD|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "infection_control": [
-    {"mode": "isolation|cohort|ppe|sanitation", "note": "string|null", "dt": "YYYY-MM-DD|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "newborn": [
-    {"apgar_1": 0-10|null, "apgar_5": 0-10|null, "apgar_10": 0-10|null, "breastfeeding_time": "string|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "orders": [
-    {"kind": "medication", "drug": "string|null", "dose": "string|null", "route": "string|null", "freq": "string|null", "period_start": "YYYY-MM-DD|null", "period_end": "YYYY-MM-DD|null", "confidence": 0.0-1.0, "quote": "..."}
-  ],
-  "vitals_daily": [
-    {"date": "YYYY-MM-DD|null", "temp": "string|null", "pulse": "string|null", "bp_sys": "int|null", "bp_dia": "int|null", "confidence": 0.0-1.0, "quote": "..."}
-  ]
-}
-"""
-    instruction = (
-        "Ты — система извлечения фактов из медицинских документов на русском/казахском. "
-        "Верни ТОЛЬКО JSON строго по схеме ниже, без пояснений и текста вокруг. "
-        "Если чего-то нет — опусти соответствующий блок или поставь null.\n\n"
-        "СХЕМА JSON:\n" + schema + "\n" 
-        "ТЕКСТ ДОКУМЕНТА НИЖЕ. Дай краткие точные цитаты 'quote' для каждого факта.\n"
-        "\n<<<\n" + doc_text + "\n>>>\n"
-    )
-    return instruction
 
-# ----------------------------- Вызов локальной LLM -----------------------------
+def load_profiles(cfg_dir: str) -> Tuple[Dict[str, Any], List[Profile]]:
+    with open(os.path.join(cfg_dir, "common.yaml"), "r", encoding="utf-8") as f:
+        common = yaml.safe_load(f)
+    profiles: List[Profile] = []
+    for name in ("therapy.yaml", "surgery.yaml", "infectious.yaml"):
+        path = os.path.join(cfg_dir, name)
+        with open(path, "r", encoding="utf-8") as f:
+            d = yaml.safe_load(f)
+            profiles.append(Profile(id=d.get("meta",{}).get("id", name.split(".")[0]), data=d))
+    return common, profiles
 
-def call_llm(llm_url: str, model: str, prompt: str) -> str:
-    """Вызывает локальную LLM (совместимую с Ollama), возвращает текст ответа."""
-    url = llm_url.rstrip("/") + "/api/generate"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
+# ============================= Детекция профиля =============================
 
-        "format": "json",
-"options": { "num_ctx": 8192, "temperature": 0.2 }
-    }
-    resp = requests.post(url, json=payload, timeout=600)
-    resp.raise_for_status()
-    data = resp.json()
-    # Ollama возвращает {'response': '...'}
-    return data.get("response", "")
+def score_profile(profile: Dict[str, Any], filename: str, text: str, tables: List[List[List[str]]]) -> int:
+    det = profile.get("detect", {})
+    score = 0
+    lowname = os.path.basename(filename).lower()
+    for k in det.get("filename_hints", []) or []:
+        if k.lower() in lowname:
+            score += 2
+    lowtext = text.lower()
+    for k in det.get("keywords", []) or []:
+        if k.lower() in lowtext:
+            score += 1
+    # table headers
+    for pat in det.get("table_headers", []) or []:
+        for tb in tables:
+            if not tb:
+                continue
+            hdr = " ".join(c.lower() for c in tb[0])
+            if all(h.lower() in hdr for h in pat):
+                score += 2
+                break
+    return score
 
-# Вытаскиваем JSON-блок из ответа (если модель прислала лишний текст)
+# ============================= Помощники нормализации =============================
 
-def extract_json_block(s: str) -> str:
-    s = s.strip()
-    # если уже чистый JSON
-    if s.startswith("{") and s.endswith("}"):
-        return s
-    # ищем первый '{' и последний '}'
-    start = s.find("{")
-    end = s.rfind("}")
-    if start != -1 and end > start:
-        return s[start:end+1]
-    # fallback: пустой минимальный JSON
-    return "{}"
+def normalize_date(s: str) -> Optional[str]:
+    s = (s or "").strip()
+    if not s:
+        return None
+    # DD.MM.YYYY HH:mm | DD.MM.YYYY
+    m = re.match(r"(\d{2})[.](\d{2})[.](\d{4})(?:\s+(\d{2}):(\d{2}))?", s)
+    if m:
+        dd, mm, yy = m.group(1), m.group(2), m.group(3)
+        if m.group(4):
+            return f"{yy}-{mm}-{dd}T{m.group(4)}:{m.group(5)}"
+        return f"{yy}-{mm}-{dd}"
+    # YYYY-MM-DD(THH:mm)
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?", s)
+    if m:
+        if m.group(4):
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T{m.group(4)}:{m.group(5)}"
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return s
 
-# ----------------------------- Сборка единого кейса -----------------------------
+def map_route(s: str, routes_map: Dict[str, List[str]]) -> Optional[str]:
+    low = (s or "").lower()
+    for canon, alts in (routes_map or {}).items():
+        for a in alts:
+            if a.lower() in low:
+                return canon
+    return (s or None)
+
+def parse_bp(s: str) -> Tuple[Optional[int], Optional[int]]:
+    if not s:
+        return None, None
+    m = re.search(r"(\d{2,3})\D+(\d{2,3})", s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None, None
+
+# ============================= Применение правил =============================
+
+def emit(case, path, obj, evidence_id):
+    # доп. защита: позволяем и 'facts.x', и просто 'x'
+    if path.startswith("facts."):
+        path = path[len("facts."):]  # отбросить префикс
+
+    cur = case["facts"]             # путь всегда относительно facts
+    keys = path.split('.')
+    for key in keys[:-1]:
+        cur = cur[key]              # у нас нет вложенных словарей ниже facts, но оставим на будущее
+
+    lst = cur[keys[-1]]
+    o = dict(obj)
+    o.setdefault("evidence", []).append(evidence_id)
+    lst.append(o)
+
+
+
+def apply_text_rules(profile: Dict[str, Any], common: Dict[str, Any], text: str, case: Dict[str, Any], evid: Evidence, doc_id: str):
+    rules = profile.get("text_rules", []) or []
+    mkb_pat = common.get("constraints", {}).get("mkb10")
+    for rule in rules:
+        rx = re.compile(rule["regex"]) if isinstance(rule.get("regex"), str) else None
+        if not rx:
+            continue
+        for m in rx.finditer(text):
+            obj: Dict[str, Any] = {}
+            fields = rule.get("fields", {})
+            for k, v in (fields or {}).items():
+                if isinstance(v, str) and v.startswith("$"):
+                    idx = int(v[1:])
+                    obj[k] = m.group(idx) if idx <= m.lastindex else None
+                else:
+                    obj[k] = v
+            # post ops
+            for post in rule.get("post", []) or []:
+                if post.get("op") == "normalize_date" and post.get("field") in obj:
+                    obj[post["field"]] = normalize_date(obj.get(post["field"]))
+                if post.get("op") == "map_kind" and post.get("field") in obj:
+                    raw = obj.get(post["field"]) or ""
+                    mp = post.get("mapping", {})
+                    for k,v in mp.items():
+                        if k in raw.lower():
+                            obj[post["field"]] = v
+                            break
+            # constraints
+            if rule.get("emit") == "facts.diagnoses" and mkb_pat:
+                if not re.match(mkb_pat, str(obj.get("code", ""))):
+                    continue
+            conf = float(rule.get("confidence", 0.8))
+            # evidence
+            start, end = max(0, m.start()-30), min(len(text), m.end()+30)
+            snippet = text[start:end]
+            ev_id = evid.add(doc_id, snippet, {"rule": rule.get("id")}, conf, "rules")
+            emit(case, rule["emit"], obj, ev_id)
+
+
+def header_role_indices(header: List[str], roles_syn: Dict[str, List[str]]) -> Dict[str, int]:
+    low = [c.lower() for c in header]
+    idx: Dict[str, int] = {}
+    for role, syns in (roles_syn or {}).items():
+        for i, cell in enumerate(low):
+            if any(s in cell for s in syns):
+                idx[role] = i
+                break
+    return idx
+
+
+def apply_table_rules(profile: Dict[str, Any], common: Dict[str, Any], tables: List[List[List[str]]], case: Dict[str, Any], evid: Evidence, doc_id: str):
+    tabsec = profile.get(".tables", {}) or {}
+    roles_syn = common.get("normalize", {}).get("synonyms", {}).get("roles", {})
+    routes_map = common.get("normalize", {}).get("routes", {})
+
+    for tb in tables:
+        if not tb:
+            continue
+        header = tb[0]
+        idxmap = header_role_indices(header, roles_syn)
+        for tname, tdesc in tabsec.items():
+            need = tdesc.get("header_roles", [])
+            if need and not all(r in idxmap for r in need):
+                continue
+            # этот профиль считает таблицу подходящей → применяем row_rules
+            for r_i in range(1, len(tb)):
+                row = tb[r_i]
+                for rule in tdesc.get("row_rules", []) or []:
+                    req = rule.get("require", [])
+                    if req and not all(k in idxmap for k in req):
+                        continue
+                    obj: Dict[str, Any] = {}
+                    # set constants
+                    for k, v in (rule.get("set", {}) or {}).items():
+                        obj[k] = v
+                    # fields ops
+                    for fld in rule.get("fields", []) or []:
+                        op = fld.get("op")
+                        if op == "copy":
+                            src = fld.get("from"); dst = fld.get("to")
+                            val = row[idxmap.get(src, -1)] if idxmap.get(src, -1) >= 0 else ""
+                            if isinstance(dst, list):
+                                # не используется для copy, но оставим общий интерфейс
+                                pass
+                            else:
+                                obj[dst] = val.strip() if isinstance(val, str) else val
+                        elif op == "parse_date":
+                            src = fld.get("from"); dst = fld.get("to")
+                            val = row[idxmap.get(src, -1)] if idxmap.get(src, -1) >= 0 else ""
+                            obj[dst] = normalize_date(val)
+                        elif op == "map_route":
+                            src = fld.get("from"); dst = fld.get("to")
+                            val = row[idxmap.get(src, -1)] if idxmap.get(src, -1) >= 0 else ""
+                            obj[dst] = map_route(val, routes_map)
+                        elif op == "parse_bp":
+                            src = fld.get("from"); dsts = fld.get("to", [])
+                            val = row[idxmap.get(src, -1)] if idxmap.get(src, -1) >= 0 else ""
+                            s, d = parse_bp(val)
+                            if isinstance(dsts, list) and len(dsts) == 2:
+                                obj[dsts[0]] = s
+                                obj[dsts[1]] = d
+                        elif op == "join_period":
+                            srcs = fld.get("from", [])
+                            dst = fld.get("to")
+                            obj[dst] = [obj.get(srcs[0]), obj.get(srcs[1]) if len(srcs) > 1 else None]
+                    # confidence & evidence
+                    conf = float(rule.get("confidence", 0.8))
+                    snippet = " | ".join(row)
+                    ev_id = evid.add(doc_id, snippet, {"table": tname, "row": r_i}, conf, "table")
+                    emit(case, rule.get("emit"), obj, ev_id)
+
+# ============================= Корневой пайплайн =============================
 
 def empty_case(case_id: str, locale: str) -> Dict[str, Any]:
     return {
@@ -193,159 +567,76 @@ def empty_case(case_id: str, locale: str) -> Dict[str, Any]:
         "evidence_index": []
     }
 
-# Объединяем факты одного файла в общий кейс с фильтром confidence
 
-def merge_facts(case: Dict[str, Any], facts: Dict[str, Any], doc_id: str, model: str, thr: float):
-    evid = case["evidence_index"]
+def run_on_docx(path: str, common: Dict[str, Any], profiles: List[Profile], case: Dict[str, Any], evid: Evidence):
+    blocks = read_docx_as_blocks(path)
+    paras, tables = blocks["paras"], blocks["tables"]
+    text = "\n".join(paras)
 
-    def add_with_evidence(path: List[str], item: Dict[str, Any], quote: Optional[str], conf: float):
-        ev_id = f"ev_{len(evid)+1:06d}"
-        evid.append({
-            "evidence_id": ev_id,
-            "doc_id": doc_id,
-            "loc": {},
-            "snippet": (quote or "")[:500],
-            "confidence": round(float(conf), 3),
-            "source_model": model
-        })
-        item = dict(item)
-        item.setdefault("evidence", []).append(ev_id)
-        # аккуратно положим item в case["facts"][path[-1]]
-        cur = case["facts"]
-        for key in path[:-1]:
-            cur = cur[key]
-        cur[path[-1]].append(item)
+    # регистрация документа
+    doc_id = f"doc_{len(case['documents'])+1:06d}"
+    case["documents"].append({
+        "doc_id": doc_id,
+        "type": "generic",
+        "created_dt": None,
+        "source": {"filename": os.path.basename(path), "hash": file_sha256(path)},
+        "lang": "ru",
+        "text_ref": f"raw://{doc_id}",
+        "pages": 1
+    })
 
-    # Diagnoses
-    for d in facts.get("diagnoses", []) or []:
-        conf = float(d.get("confidence", 0))
-        if conf >= thr and d.get("code"):
-            add_with_evidence(["diagnoses"], {"code": d.get("code"), "label": d.get("label"), "dt": d.get("date")}, d.get("quote"), conf)
+    # детекция профиля
+    best: Tuple[int, Optional[Profile]] = (0, None)
+    for pr in profiles:
+        sc = score_profile(pr.data, path, text, tables)
+        if sc > best[0]:
+            best = (sc, pr)
+    pr = best[1]
+    if pr is None or best[0] < int((pr.data.get("detect", {}) or {}).get("min_score", 1)):
+        pr = profiles[0]  # fallback: первый (обычно therapy)
 
-    # Consents
-    for c in facts.get("consents", []) or []:
-        conf = float(c.get("confidence", 0))
-        if conf >= thr and c.get("kind"):
-            add_with_evidence(["consents"], {"kind": c.get("kind"), "signed_dt": c.get("signed_dt")}, c.get("quote"), conf)
+    # применяем правила
+    apply_text_rules(pr.data, common, text, case, evid, doc_id)
+    apply_table_rules(pr.data, common, tables, case, evid, doc_id)
 
-    # Anesthesia
-    for a in facts.get("anesthesia", []) or []:
-        conf = float(a.get("confidence", 0))
-        if conf >= thr and (a.get("asa") or a.get("dt")):
-            add_with_evidence(["anesthesia"], {"asa": a.get("asa"), "dt": a.get("dt")}, a.get("quote"), conf)
-
-    # Procedures
-    for p in facts.get("procedures", []) or []:
-        conf = float(p.get("confidence", 0))
-        if conf >= thr and p.get("type"):
-            add_with_evidence(["procedures"], {"type": p.get("type"), "code": p.get("code"), "dt": p.get("dt")}, p.get("quote"), conf)
-
-    # Infection control
-    for ic in facts.get("infection_control", []) or []:
-        conf = float(ic.get("confidence", 0))
-        if conf >= thr and ic.get("mode"):
-            add_with_evidence(["infection_control"], {"mode": ic.get("mode"), "note": ic.get("note"), "dt": ic.get("dt")}, ic.get("quote"), conf)
-
-    # Newborn
-    for nb in facts.get("newborn", []) or []:
-        conf = float(nb.get("confidence", 0))
-        if conf >= thr:
-            add_with_evidence(["newborn"], {
-                "apgar_1": nb.get("apgar_1"),
-                "apgar_5": nb.get("apgar_5"),
-                "apgar_10": nb.get("apgar_10"),
-                "breastfeeding_time": nb.get("breastfeeding_time")
-            }, nb.get("quote"), conf)
-
-    # Orders
-    for od in facts.get("orders", []) or []:
-        conf = float(od.get("confidence", 0))
-        if conf >= thr and (od.get("drug") or od.get("period_start")):
-            add_with_evidence(["orders"], {
-                "kind": "medication",
-                "drug": od.get("drug"),
-                "dose": od.get("dose"),
-                "route": od.get("route"),
-                "freq": od.get("freq"),
-                "period": [od.get("period_start"), od.get("period_end")]
-            }, od.get("quote"), conf)
-
-    # Vitals daily
-    for vt in facts.get("vitals_daily", []) or []:
-        conf = float(vt.get("confidence", 0))
-        if conf >= thr and any(vt.get(k) for k in ("date","temp","pulse","bp_sys","bp_dia")):
-            add_with_evidence(["vitals_daily"], {
-                "date": vt.get("date"),
-                "temp": vt.get("temp"),
-                "pulse": vt.get("pulse"),
-                "bp_sys": vt.get("bp_sys"),
-                "bp_dia": vt.get("bp_dia")
-            }, vt.get("quote"), conf)
-
-# ----------------------------- Основной сценарий -----------------------------
 
 def main():
-    args = parse_args()
+    ap = argparse.ArgumentParser(description="Профильный парсер .docx без LLM")
+    ap.add_argument("inputs", nargs="*")
+    ap.add_argument("--case-id", help="ID кейса")
+    ap.add_argument("--out", help="куда сохранить JSON")
+    ap.add_argument("--locale", default="ru-KZ")
+    ap.add_argument("--configs", default="configs/v1")
+    ap.add_argument("--init-config", action="store_true", help="создать дефолтные YAML профили в --configs")
+    args = ap.parse_args()
+
+    if args.init_config:
+        ensure_default_configs(args.configs)
+        if not args.inputs:
+            return
+
+    if not args.case_id or not args.out or not args.inputs:
+        print("Usage: med_parse_rules.py --case-id ID --out case.json [--configs configs/v1] files.docx...", file=sys.stderr)
+        sys.exit(2)
+
+    # загрузка конфигов
+    ensure_default_configs(args.configs)  # на всякий случай, не перезаписывает существующие
+    common, profiles = load_profiles(args.configs)
 
     case = empty_case(args.case_id, args.locale)
+    evid = Evidence()
 
-    for path in args.inputs:
-        if not os.path.isfile(path) or not path.lower().endswith('.docx'):
-            print(f"[skip] не docx: {path}", file=sys.stderr)
+    for p in args.inputs:
+        if not os.path.isfile(p) or not p.lower().endswith('.docx'):
+            print(f"[skip] не docx: {p}", file=sys.stderr)
             continue
+        run_on_docx(p, common, profiles, case, evid)
 
-        # Регистрируем документ в списке case["documents"]
-        doc_id = f"doc_{len(case['documents'])+1:06d}"
-        case["documents"].append({
-            "doc_id": doc_id,
-            "type": "generic",
-            "created_dt": None,
-            "source": {"filename": os.path.basename(path), "hash": file_sha256(path)},
-            "lang": "ru",
-            "text_ref": f"raw://{doc_id}",
-            "pages": 1
-        })
+    case["evidence_index"] = evid.items
 
-        # 1) Получаем текстовое представление DOCX
-        bundle = read_docx_as_text(path)
-        text_blob = bundle["text"]
-
-        # 2) Готовим промпт и вызываем локальную модель
-        prompt = build_prompt(text_blob)
-        try:
-            llm_resp = call_llm(args.llm_url, args.model, prompt)
-        except Exception as e:
-            print(f"[llm] ошибка запроса: {e}", file=sys.stderr)
-            continue
-
-        # 3) Извлекаем JSON-факты из ответа модели
-        json_block = extract_json_block(llm_resp)
-        try:
-            facts = json.loads(json_block) if json_block.strip() else {}
-        except Exception as e:
-            print("[llm] не удалось распарсить JSON из ответа — сохраняю сырой ответ в evidence", file=sys.stderr)
-            # как fallback — сохраним весь ответ как evidence-запись
-            case["evidence_index"].append({
-                "evidence_id": f"ev_{len(case['evidence_index'])+1:06d}",
-                "doc_id": doc_id,
-                "loc": {},
-                "snippet": llm_resp[:500],
-                "confidence": 0.0,
-                "source_model": args.model
-            })
-            continue
-
-        # 4) Мёрджим факты в единый кейс с порогом confidence
-        if isinstance(facts, dict):
-            merge_facts(case, facts, doc_id, args.model, args.threshold)
-        else:
-            print("[llm] Ответ модели не объект JSON — пропуск", file=sys.stderr)
-
-    # Запись результата
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(case, f, ensure_ascii=False, indent=2)
-    print(f"[ok] Сохранено: {args.out}")
-
+    print(f"[ok] saved: {args.out}")
 
 if __name__ == "__main__":
     main()

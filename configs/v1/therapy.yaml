@@ -1,0 +1,94 @@
+meta:
+  id: therapy
+  title: Терапия / дневной стационар
+  profile_version: v1
+  doc_type: therapy
+
+detect:
+  min_score: 2
+  filename_hints: ["терап", "terap"]
+  keywords: ["терапевт", "дневн", "температур", "назначени"]
+  table_headers:
+    - ["дата","t","пульс","ад"]
+    - ["препарат","доза","путь","кратн"]
+
+text_rules:
+  - id: dx_mkb10
+    description: Диагнозы МКБ-10 из текста
+    regex: '(?<!АД\s)([A-ZА-Я][0-9]{2}(?:\.[0-9A-ZА-Я]{1,2})?)'
+    emit: facts.diagnoses
+    fields:
+      code: "$1"
+    confidence: 0.9
+
+  - id: isolation_kw
+    description: Ключевые слова изоляции
+    regex: '(?i)(изоляц\w*|эпидреж\w*|бокс\w*|кохорт\w*)'
+    emit: facts.infection_control
+    fields:
+      mode: "isolation"
+      note: "$1"
+    confidence: 0.8
+
+.tables:
+  vitals_sheet:
+    header_roles: ["date","temp","pulse","bp"]
+    row_rules:
+      - require: ["date"]
+        emit: facts.vitals_daily
+        fields:
+          - op: parse_date
+            from: date
+            to: date
+          - op: copy
+            from: temp
+            to: temp
+          - op: copy
+            from: pulse
+            to: pulse
+          - op: parse_bp
+            from: bp
+            to: [bp_sys, bp_dia]
+        confidence: 0.85
+
+  orders_sheet:
+    header_roles: ["drug","dose","route","freq","date","exec"]
+    row_rules:
+      - require: ["drug"]
+        emit: facts.orders
+        fields:
+          - op: copy
+            from: drug
+            to: drug
+          - op: copy
+            from: dose
+            to: dose
+          - op: map_route
+            from: route
+            to: route
+          - op: copy
+            from: freq
+            to: freq
+          - op: parse_date
+            from: date
+            to: period_start
+          - op: join_period
+            from: [period_start, period_end]
+            to: period
+        set:
+          kind: medication
+        confidence: 0.85
+
+      - require: ["drug","exec"]
+        emit: facts.administrations
+        fields:
+          - op: copy
+            from: drug
+            to: drug
+          - op: parse_date
+            from: date
+            to: dt
+          - op: copy
+            from: exec
+            to: nurse
+        confidence: 0.8

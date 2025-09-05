@@ -1,0 +1,51 @@
+meta:
+  id: infectious
+  title: Инфекционные отделения / противоэпидрежим
+  profile_version: v1
+  doc_type: infectious
+
+detect:
+  min_score: 2
+  filename_hints: ["инфек", "infection"]
+  keywords: ["изоляц", "бокс", "эпидреж", "кохорт", "контактн"]
+  table_headers:
+    - ["дата","t","пульс","ад"]
+
+text_rules:
+  - id: isolation_kw
+    description: Изоляция, бокс, эпидрежим
+    regex: '(?i)(изоляц\w*|бокс\w*|эпидреж\w*|кохорт\w*)'
+    emit: facts.infection_control
+    fields:
+      mode: "isolation"
+      note: "$1"
+    confidence: 0.9
+
+  - id: dx_mkb10
+    description: Диагнозы МКБ-10
+    regex: '(?<!АД\s)([A-ZА-Я][0-9]{2}(?:\.[0-9A-ZА-Я]{1,2})?)'
+    emit: facts.diagnoses
+    fields:
+      code: "$1"
+    confidence: 0.85
+
+.tables:
+  vitals_sheet:
+    header_roles: ["date","temp","pulse","bp"]
+    row_rules:
+      - require: ["date"]
+        emit: facts.vitals_daily
+        fields:
+          - op: parse_date
+            from: date
+            to: date
+          - op: copy
+            from: temp
+            to: temp
+          - op: copy
+            from: pulse
+            to: pulse
+          - op: parse_bp
+            from: bp
+            to: [bp_sys, bp_dia]
+        confidence: 0.85

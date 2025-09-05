@@ -1,0 +1,76 @@
+meta:
+  id: surgery
+  title: Хирургия / операционный блок
+  profile_version: v1
+  doc_type: surgery
+
+detect:
+  min_score: 2
+  filename_hints: ["хирург", "surgery", "операц"]
+  keywords: ["операц", "вмешател", "анестез", "ASA", "послеоперац"]
+  table_headers:
+    - ["препарат","доза","путь","кратн"]
+
+text_rules:
+  - id: procedure_dt
+    description: Дата/время операции
+    regex: '(?i)(операц\w*|вмешател\w*).{0,40}?((?:\d{2}[.]){2}\d{4}(?:\s+\d{2}:\d{2})?)'
+    emit: facts.procedures
+    fields:
+      type: "surgery"
+      dt: "$2"
+    post:
+      - op: normalize_date
+        field: dt
+    confidence: 0.9
+
+  - id: asa
+    description: ASA класс
+    regex: '\bASA\s*(I|II|III|IV|V)\b'
+    emit: facts.anesthesia
+    fields:
+      asa: "$1"
+    confidence: 0.9
+
+  - id: consent
+    description: Согласие на операцию/анестезию
+    regex: '(?i)согласие\s+на\s+(операц\w*|анестез\w*).{0,40}?подпис'
+    emit: facts.consents
+    fields:
+      kind: "$1"
+    post:
+      - op: map_kind
+        field: kind
+        mapping:
+          "операц": "surgery"
+          "анестез": "anesthesia"
+    confidence: 0.8
+
+.tables:
+  orders_sheet:
+    header_roles: ["drug","dose","route","freq","date","exec"]
+    row_rules:
+      - require: ["drug"]
+        emit: facts.orders
+        fields:
+          - op: copy
+            from: drug
+            to: drug
+          - op: copy
+            from: dose
+            to: dose
+          - op: map_route
+            from: route
+            to: route
+          - op: copy
+            from: freq
+            to: freq
+          - op: parse_date
+            from: date
+            to: period_start
+          - op: join_period
+            from: [period_start, period_end]
+            to: period
+        set:
+          kind: medication
+        confidence: 0.85
